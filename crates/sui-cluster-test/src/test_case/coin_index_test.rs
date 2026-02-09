@@ -238,6 +238,41 @@ impl TestCaseImpl for CoinIndexTest {
 
         assert_eq!(balances, expected_balances,);
 
+        // 4a. Test suix_getCoinMetadata for SUI and MANAGED
+        info!("Testing getCoinMetadata for SUI");
+        let sui_metadata = client
+            .coin_read_api()
+            .get_coin_metadata("0x2::sui::SUI".into())
+            .await
+            .expect("getCoinMetadata should succeed for SUI");
+        let sui_metadata = sui_metadata.expect("SUI metadata should exist");
+        assert_eq!(sui_metadata.decimals, 9, "SUI should have 9 decimals");
+        assert_eq!(sui_metadata.symbol, "SUI", "SUI symbol should be SUI");
+
+        info!("Testing getCoinMetadata for MANAGED coin");
+        let managed_metadata = client
+            .coin_read_api()
+            .get_coin_metadata(coin_type_str.clone())
+            .await
+            .expect("getCoinMetadata should succeed for MANAGED coin");
+        let managed_metadata = managed_metadata.expect("MANAGED metadata should exist");
+        assert_eq!(
+            managed_metadata.decimals, 2,
+            "MANAGED coin should have 2 decimals"
+        );
+
+        // 4b. Test suix_getOwnedObjects
+        info!("Testing getOwnedObjects");
+        let owned_objects = client
+            .read_api()
+            .get_owned_objects(account, None, None, Some(50))
+            .await
+            .expect("getOwnedObjects should succeed");
+        assert!(
+            !owned_objects.data.is_empty(),
+            "Account should own at least one object after minting"
+        );
+
         // 5. Mint another MANAGED coin to account, balance 10
         let txn = client
             .transaction_builder()

@@ -29,10 +29,11 @@ use sui_types::{
 };
 use test_case::{
     coin_index_test::CoinIndexTest, coin_merge_split_test::CoinMergeSplitTest,
+    dynamic_field_test::DynamicFieldTest, event_query_test::EventQueryTest,
     fullnode_build_publish_transaction_test::FullNodeBuildPublishTransactionTest,
     fullnode_execute_transaction_test::FullNodeExecuteTransactionTest,
-    native_transfer_test::NativeTransferTest, random_beacon_test::RandomBeaconTest,
-    shared_object_test::SharedCounterTest,
+    native_transfer_test::NativeTransferTest, package_upgrade_test::PackageUpgradeTest,
+    ptb_test::PtbTest, random_beacon_test::RandomBeaconTest, shared_object_test::SharedCounterTest,
 };
 use tokio::time::{self, Duration};
 use tracing::{error, info};
@@ -314,6 +315,10 @@ impl ClusterTest {
             TestCase::new(FullNodeBuildPublishTransactionTest {}),
             TestCase::new(CoinIndexTest {}),
             TestCase::new(RandomBeaconTest {}),
+            TestCase::new(PtbTest {}),
+            TestCase::new(EventQueryTest {}),
+            TestCase::new(PackageUpgradeTest {}),
+            TestCase::new(DynamicFieldTest {}),
         ];
 
         // TODO: improve the runner parallelism for efficiency

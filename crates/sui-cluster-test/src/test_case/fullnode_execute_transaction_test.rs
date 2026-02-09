@@ -5,6 +5,7 @@ use crate::{TestCaseImpl, TestContext};
 use async_trait::async_trait;
 use sui_json_rpc_types::{
     SuiExecutionStatus, SuiTransactionBlockEffectsAPI, SuiTransactionBlockResponseOptions,
+    SuiTransactionBlockResponseQuery, TransactionFilter,
 };
 use sui_sdk::SuiClient;
 use sui_types::{
@@ -40,6 +41,47 @@ impl TestCaseImpl for FullNodeExecuteTransactionTest {
     }
 
     async fn run(&self, ctx: &mut TestContext) -> Result<(), anyhow::Error> {
+        let fullnode = ctx.get_fullnode_client();
+
+        // Test checkpoint and protocol queries (no transaction needed)
+        info!("Testing checkpoint and protocol queries");
+        let checkpoint_seq = fullnode
+            .read_api()
+            .get_latest_checkpoint_sequence_number()
+            .await
+            .expect("get_latest_checkpoint_sequence_number should succeed");
+        assert!(
+            checkpoint_seq > 0,
+            "Latest checkpoint sequence number should be > 0"
+        );
+
+        let checkpoint = fullnode
+            .read_api()
+            .get_checkpoint(checkpoint_seq.into())
+            .await
+            .expect("get_checkpoint should succeed");
+        assert_eq!(
+            checkpoint.sequence_number, checkpoint_seq,
+            "Checkpoint sequence number should match"
+        );
+
+        let protocol_config = fullnode
+            .read_api()
+            .get_protocol_config(None)
+            .await
+            .expect("get_protocol_config should succeed");
+        assert!(
+            protocol_config.protocol_version > 0.into(),
+            "Protocol version should be > 0"
+        );
+
+        let chain_id = fullnode
+            .read_api()
+            .get_chain_identifier()
+            .await
+            .expect("get_chain_identifier should succeed");
+        assert!(!chain_id.is_empty(), "Chain identifier should not be empty");
+
         let txn_count = 4;
         ctx.get_sui_from_faucet(Some(1)).await;
 
@@ -104,6 +146,63 @@ impl TestCaseImpl for FullNodeExecuteTransactionTest {
         }
         // Unlike in other execution modes, there's no need to wait for the node to sync
         Self::verify_transaction(fullnode, txn_digest).await;
+
+        // Test suix_queryTransactionBlocks
+        info!("Testing queryTransactionBlocks");
+        let sender = ctx.get_wallet_address();
+        let query = SuiTransactionBlockResponseQuery::new_with_filter(
+            TransactionFilter::FromAddress(sender),
+        );
+        let tx_page = fullnode
+            .read_api()
+            .query_transaction_blocks(query, None, Some(10), true)
+            .await
+            .expect("query_transaction_blocks should succeed");
+        assert!(
+            !tx_page.data.is_empty(),
+            "Should find at least one transaction from the sender"
+        );
+        assert!(
+            tx_page.data.iter().any(|tx| tx.digest == txn_digest),
+            "Query results should include the just-executed transaction"
+        );
+
+        // Test response option completeness
+        info!("Testing transaction response with all options enabled");
+        let full_response = fullnode
+            .read_api()
+            .get_transaction_with_options(
+                txn_digest,
+                SuiTransactionBlockResponseOptions::new()
+                    .with_effects()
+                    .with_events()
+                    .with_object_changes()
+                    .with_balance_changes()
+                    .with_input()
+                    .with_raw_input(),
+            )
+            .await
+            .expect("get_transaction_with_options with all options should succeed");
+        assert!(
+            full_response.effects.is_some(),
+            "Response should include effects"
+        );
+        assert!(
+            full_response.object_changes.is_some(),
+            "Response should include object_changes"
+        );
+        assert!(
+            full_response.balance_changes.is_some(),
+            "Response should include balance_changes"
+        );
+        assert!(
+            full_response.transaction.is_some(),
+            "Response should include transaction from with_input()"
+        );
+        assert!(
+            !full_response.raw_transaction.is_empty(),
+            "Response should include raw_transaction from with_raw_input()"
+        );
 
         Ok(())
     }

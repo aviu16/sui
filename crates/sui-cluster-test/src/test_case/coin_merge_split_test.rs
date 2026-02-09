@@ -4,7 +4,10 @@
 use crate::{TestCaseImpl, TestContext, helper::ObjectChecker};
 use async_trait::async_trait;
 use jsonrpsee::rpc_params;
-use sui_json_rpc_types::{SuiTransactionBlockEffectsAPI, SuiTransactionBlockResponse};
+use sui_json_rpc_types::{
+    SuiExecutionStatus, SuiObjectDataOptions, SuiTransactionBlockEffectsAPI,
+    SuiTransactionBlockResponse,
+};
 use sui_types::base_types::{ObjectID, SuiAddress};
 use sui_types::object::Owner;
 use sui_types::sui_serde::BigInt;
@@ -44,6 +47,35 @@ impl TestCaseImpl for CoinMergeSplitTest {
 
         // Verify fullnode observes the txn
         ctx.let_fullnode_sync(vec![tx_digest], 5).await;
+
+        // Test sui_multiGetObjects: batch-read the created coin objects
+        info!("Testing multi_get_object_with_options on split coins");
+        let created_ids: Vec<ObjectID> = new_coins.iter().map(|c| c.reference.object_id).collect();
+        let multi_result = ctx
+            .get_fullnode_client()
+            .read_api()
+            .multi_get_object_with_options(
+                created_ids.clone(),
+                SuiObjectDataOptions::new().with_owner().with_type(),
+            )
+            .await
+            .expect("multi_get_object_with_options should succeed");
+        assert_eq!(
+            multi_result.len(),
+            created_ids.len(),
+            "multi_get should return all requested objects"
+        );
+        for obj_response in &multi_result {
+            let obj_data = obj_response
+                .data
+                .as_ref()
+                .expect("Each split coin should have data");
+            assert_eq!(
+                obj_data.owner.as_ref().unwrap(),
+                &Owner::AddressOwner(signer),
+                "Split coin should be owned by the signer"
+            );
+        }
 
         let _ = futures::future::join_all(
             new_coins
@@ -157,6 +189,20 @@ impl CoinMergeSplitTest {
             .await
             .unwrap();
 
-        ctx.sign_and_execute(data, "coin merge").await
+        // Test sui_dryRunTransactionBlock on a split transaction
+        info!("Testing dry run of coin split transaction");
+        let dry_run_result = ctx
+            .get_fullnode_client()
+            .read_api()
+            .dry_run_transaction_block(data.clone())
+            .await
+            .expect("Dry run should succeed for a coin split transaction");
+        assert!(
+            matches!(dry_run_result.effects.status(), SuiExecutionStatus::Success),
+            "Dry run of coin split should succeed, got: {:?}",
+            dry_run_result.effects.status()
+        );
+
+        ctx.sign_and_execute(data, "coin split").await
     }
 }
