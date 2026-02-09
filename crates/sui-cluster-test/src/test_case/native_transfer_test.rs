@@ -1,6 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+use anyhow::Context;
 use async_trait::async_trait;
 use jsonrpsee::rpc_params;
 use tracing::info;
@@ -33,6 +34,17 @@ impl TestCaseImpl for NativeTransferTest {
         "Test tranferring SUI coins natively"
     }
 
+    fn rpcs_tested(&self) -> Vec<&'static str> {
+        vec![
+            "sui_dryRunTransactionBlock",
+            "sui_devInspectTransactionBlock",
+            "unsafe_transferObject",
+            "unsafe_transferSui",
+            "sui_executeTransactionBlock",
+            "sui_getObject",
+        ]
+    }
+
     async fn run(&self, ctx: &mut TestContext) -> Result<(), anyhow::Error> {
         info!("Testing gas coin transfer");
         let mut sui_objs = ctx.get_sui_from_faucet(Some(1)).await;
@@ -51,7 +63,8 @@ impl TestCaseImpl for NativeTransferTest {
         ];
         let data = ctx
             .build_transaction_remotely("unsafe_transferObject", params)
-            .await?;
+            .await
+            .context("building transferObject transaction")?;
 
         // Test sui_dryRunTransactionBlock
         info!("Testing dry run of transfer transaction");
@@ -60,7 +73,7 @@ impl TestCaseImpl for NativeTransferTest {
             .read_api()
             .dry_run_transaction_block(data.clone())
             .await
-            .expect("Dry run should succeed for a valid transfer transaction");
+            .context("dry run of transfer transaction")?;
         assert!(
             matches!(dry_run_result.effects.status(), SuiExecutionStatus::Success),
             "Dry run of transfer should succeed, got: {:?}",
@@ -69,6 +82,10 @@ impl TestCaseImpl for NativeTransferTest {
         assert!(
             !dry_run_result.balance_changes.is_empty(),
             "Dry run should report balance changes for a transfer"
+        );
+        info!(
+            "Dry run verified: status=Success, {} balance change(s)",
+            dry_run_result.balance_changes.len()
         );
 
         // Test sui_devInspectTransactionBlock
@@ -79,7 +96,7 @@ impl TestCaseImpl for NativeTransferTest {
             .read_api()
             .dev_inspect_transaction_block(signer, tx_kind, None, None, None)
             .await
-            .expect("Dev inspect should succeed for a valid transfer transaction");
+            .context("dev inspect of transfer transaction")?;
         assert!(
             matches!(
                 dev_inspect_result.effects.status(),
@@ -88,10 +105,12 @@ impl TestCaseImpl for NativeTransferTest {
             "Dev inspect of transfer should succeed, got: {:?}",
             dev_inspect_result.effects.status()
         );
+        info!("Dev inspect verified: status=Success");
 
         let mut response = ctx.sign_and_execute(data, "coin transfer").await;
 
         Self::examine_response(ctx, &mut response, signer, recipient_addr, obj_to_transfer).await;
+        info!("Transfer object verified: object moved to recipient");
 
         let mut sui_objs_2 = ctx.get_sui_from_faucet(Some(1)).await;
         // Test transfer sui
@@ -105,10 +124,12 @@ impl TestCaseImpl for NativeTransferTest {
         ];
         let data = ctx
             .build_transaction_remotely("unsafe_transferSui", params)
-            .await?;
+            .await
+            .context("building transferSui transaction")?;
         let mut response = ctx.sign_and_execute(data, "coin transfer").await;
 
         Self::examine_response(ctx, &mut response, signer, recipient_addr, obj_to_transfer).await;
+        info!("Transfer SUI verified: coin moved to recipient");
 
         // Test error path: non-existent object
         info!("Testing error path: non-existent object");
@@ -118,7 +139,7 @@ impl TestCaseImpl for NativeTransferTest {
             .read_api()
             .get_object_with_options(random_id, SuiObjectDataOptions::new())
             .await
-            .expect("get_object should return a response even for non-existent objects");
+            .context("get_object for non-existent object")?;
         assert!(
             obj_response.data.is_none(),
             "Non-existent object should have no data"
@@ -127,6 +148,7 @@ impl TestCaseImpl for NativeTransferTest {
             obj_response.error.is_some(),
             "Non-existent object should have an error field"
         );
+        info!("Error path verified: non-existent object returns error field");
 
         Ok(())
     }

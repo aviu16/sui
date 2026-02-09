@@ -20,6 +20,10 @@ impl TestCaseImpl for RandomBeaconTest {
         "Test publishing basics packages and emitting an event that depends on a random value."
     }
 
+    fn rpcs_tested(&self) -> Vec<&'static str> {
+        vec!["sui_executeTransactionBlock", "sui_getProtocolConfig"]
+    }
+
     async fn run(&self, ctx: &mut TestContext) -> Result<(), anyhow::Error> {
         let wallet_context: &WalletContext = ctx.get_wallet();
         // Test only if the beacon is enabled.
@@ -58,6 +62,7 @@ impl TestCaseImpl for RandomBeaconTest {
         // Verify fullnode observes the txn
         ctx.let_fullnode_sync(vec![response.transaction.digest()], 5)
             .await;
+        info!("Random beacon verified: RandomU128Event emitted");
 
         Ok(())
     }

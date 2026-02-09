@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{TestCaseImpl, TestContext, helper::ObjectChecker};
+use anyhow::Context;
 use async_trait::async_trait;
 use jsonrpsee::rpc_params;
 use sui_json_rpc_types::{
@@ -25,6 +26,16 @@ impl TestCaseImpl for CoinMergeSplitTest {
         "Test merge and split SUI coins"
     }
 
+    fn rpcs_tested(&self) -> Vec<&'static str> {
+        vec![
+            "unsafe_splitCoin",
+            "unsafe_mergeCoins",
+            "sui_dryRunTransactionBlock",
+            "sui_multiGetObjects",
+            "sui_executeTransactionBlock",
+        ]
+    }
+
     async fn run(&self, ctx: &mut TestContext) -> Result<(), anyhow::Error> {
         let mut sui_objs = ctx.get_sui_from_faucet(Some(1)).await;
         let gas_obj = sui_objs.swap_remove(0);
@@ -44,6 +55,10 @@ impl TestCaseImpl for CoinMergeSplitTest {
             Self::split_coin(ctx, signer, *primary_coin.id(), amounts, *gas_obj.id()).await;
         let tx_digest = response.digest;
         let new_coins = response.effects.as_ref().unwrap().created();
+        info!(
+            "Coin split verified: {} new coin(s) created",
+            new_coins.len()
+        );
 
         // Verify fullnode observes the txn
         ctx.let_fullnode_sync(vec![tx_digest], 5).await;
@@ -59,7 +74,7 @@ impl TestCaseImpl for CoinMergeSplitTest {
                 SuiObjectDataOptions::new().with_owner().with_type(),
             )
             .await
-            .expect("multi_get_object_with_options should succeed");
+            .context("multi_get_object_with_options on split coins")?;
         assert_eq!(
             multi_result.len(),
             created_ids.len(),
@@ -76,6 +91,10 @@ impl TestCaseImpl for CoinMergeSplitTest {
                 "Split coin should be owned by the signer"
             );
         }
+        info!(
+            "multiGetObjects verified: {} object(s) returned, all owned by signer",
+            multi_result.len()
+        );
 
         let _ = futures::future::join_all(
             new_coins
@@ -141,6 +160,11 @@ impl TestCaseImpl for CoinMergeSplitTest {
             original_value,
             primary_after_merge.value(),
         );
+        info!(
+            "Coin merge verified: {} coin(s) merged back, primary value restored to {}",
+            coins_merged.len(),
+            primary_after_merge.value()
+        );
         Ok(())
     }
 }
@@ -202,6 +226,7 @@ impl CoinMergeSplitTest {
             "Dry run of coin split should succeed, got: {:?}",
             dry_run_result.effects.status()
         );
+        info!("Dry run verified: status=Success");
 
         ctx.sign_and_execute(data, "coin split").await
     }

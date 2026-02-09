@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{TestCaseImpl, TestContext};
+use anyhow::Context;
 use async_trait::async_trait;
 use sui_json_rpc_types::EventFilter;
 use sui_sdk::wallet_context::WalletContext;
@@ -19,6 +20,10 @@ impl TestCaseImpl for EventQueryTest {
 
     fn description(&self) -> &'static str {
         "Test event emission and querying by digest and type filter"
+    }
+
+    fn rpcs_tested(&self) -> Vec<&'static str> {
+        vec!["sui_getEvents", "suix_queryEvents"]
     }
 
     async fn run(&self, ctx: &mut TestContext) -> Result<(), anyhow::Error> {
@@ -53,7 +58,7 @@ impl TestCaseImpl for EventQueryTest {
             .event_api()
             .get_events(tx_digest)
             .await
-            .expect("get_events should succeed");
+            .context("get_events by transaction digest")?;
         assert!(
             !events.is_empty(),
             "Should have at least one event from the transaction"
@@ -63,6 +68,11 @@ impl TestCaseImpl for EventQueryTest {
             "RandomU128Event",
             "Event type should be RandomU128Event"
         );
+        info!(
+            "get_events verified: {} event(s), type={}",
+            events.len(),
+            events[0].type_.name
+        );
 
         // Test query_events by event type filter
         info!("Testing query_events by MoveEventType filter");
@@ -71,7 +81,7 @@ impl TestCaseImpl for EventQueryTest {
             .event_api()
             .query_events(EventFilter::MoveEventType(event_type), None, Some(10), true)
             .await
-            .expect("query_events should succeed");
+            .context("query_events by MoveEventType filter")?;
         assert!(
             !event_page.data.is_empty(),
             "Should find at least one event matching the type filter"
@@ -79,6 +89,10 @@ impl TestCaseImpl for EventQueryTest {
         assert!(
             event_page.data.iter().any(|e| e.id.tx_digest == tx_digest),
             "Filtered results should include the event from our transaction"
+        );
+        info!(
+            "query_events verified: {} result(s) matching type filter",
+            event_page.data.len()
         );
 
         Ok(())

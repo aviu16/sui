@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{TestCaseImpl, TestContext};
+use anyhow::Context;
 use async_trait::async_trait;
 use jsonrpsee::rpc_params;
 use move_core_types::identifier::Identifier;
@@ -25,6 +26,14 @@ impl TestCaseImpl for PackageUpgradeTest {
 
     fn description(&self) -> &'static str {
         "Test publishing a Move package and upgrading it"
+    }
+
+    fn rpcs_tested(&self) -> Vec<&'static str> {
+        vec![
+            "unsafe_publish",
+            "sui_executeTransactionBlock",
+            "sui_getObject",
+        ]
     }
 
     async fn run(&self, ctx: &mut TestContext) -> Result<(), anyhow::Error> {
@@ -52,7 +61,8 @@ impl TestCaseImpl for PackageUpgradeTest {
         ];
         let data = ctx
             .build_transaction_remotely("unsafe_publish", params)
-            .await?;
+            .await
+            .context("building publish transaction for base package")?;
         let response = ctx.sign_and_execute(data, "publish base package").await;
         let changes = response.object_changes.as_ref().unwrap();
 
@@ -136,7 +146,8 @@ impl TestCaseImpl for PackageUpgradeTest {
         let wallet = ctx.get_wallet();
         let gas_obj = wallet
             .get_one_gas_object_owned_by_address(sender)
-            .await?
+            .await
+            .context("fetching gas object for upgrade")?
             .expect("Should have a gas object for upgrade");
 
         let tx_data =
@@ -153,10 +164,7 @@ impl TestCaseImpl for PackageUpgradeTest {
             })
             .expect("Upgrade should create a new package version");
 
-        info!(
-            "Package upgraded successfully. New package: {}",
-            new_package_id
-        );
+        info!("Package upgraded: {} -> {}", package_id, new_package_id);
 
         ctx.let_fullnode_sync(vec![response.digest], 5).await;
 
@@ -169,11 +177,12 @@ impl TestCaseImpl for PackageUpgradeTest {
                 sui_json_rpc_types::SuiObjectDataOptions::new().with_owner(),
             )
             .await
-            .expect("Should be able to read upgraded package");
+            .context("reading upgraded package from fullnode")?;
         assert!(
             new_pkg_obj.data.is_some(),
             "Upgraded package should exist on fullnode"
         );
+        info!("Upgraded package verified on fullnode");
 
         Ok(())
     }

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{TestCaseImpl, TestContext};
+use anyhow::Context;
 use async_trait::async_trait;
 use sui_json_rpc_types::SuiTransactionBlockEffectsAPI;
 use sui_sdk::wallet_context::WalletContext;
@@ -22,6 +23,10 @@ impl TestCaseImpl for PtbTest {
         "Test executing a programmable transaction block with multiple operations"
     }
 
+    fn rpcs_tested(&self) -> Vec<&'static str> {
+        vec!["sui_executeTransactionBlock"]
+    }
+
     async fn run(&self, ctx: &mut TestContext) -> Result<(), anyhow::Error> {
         info!("Testing programmable transaction block execution");
 
@@ -36,7 +41,8 @@ impl TestCaseImpl for PtbTest {
         // Get a gas object for the PTB
         let gas_obj = wallet
             .get_one_gas_object_owned_by_address(sender)
-            .await?
+            .await
+            .context("fetching gas object for first PTB")?
             .expect("Should have a gas object");
 
         // Build a PTB that splits a coin and transfers part to a recipient
@@ -68,13 +74,18 @@ impl TestCaseImpl for PtbTest {
             recipient_change.unwrap().amount > 0,
             "Recipient should receive positive balance"
         );
+        info!(
+            "PTB transfer verified: {} object(s) created/mutated, recipient received funds",
+            effects.created().len() + effects.mutated().len()
+        );
 
-        // Test a second PTB: transfer to self (exercises PTB with different recipient)
+        // Test a second PTB: transfer to a different recipient
         info!("Testing PTB with transfer to second recipient");
         let (recipient2, _): (_, AccountKeyPair) = get_key_pair();
         let gas_obj = wallet
             .get_one_gas_object_owned_by_address(sender)
-            .await?
+            .await
+            .context("fetching gas object for second PTB")?
             .expect("Should have a gas object for second PTB");
 
         let tx_data = TestTransactionBuilder::new(sender, gas_obj, rgp)
@@ -92,6 +103,10 @@ impl TestCaseImpl for PtbTest {
         );
 
         ctx.let_fullnode_sync(vec![response.digest], 5).await;
+        info!(
+            "Second PTB verified: {} object(s) created for recipient2",
+            effects.created().len()
+        );
 
         Ok(())
     }

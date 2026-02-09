@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{TestCaseImpl, TestContext};
+use anyhow::Context;
 use async_trait::async_trait;
 use move_core_types::language_storage::TypeTag;
 use serde_json::json;
@@ -23,6 +24,16 @@ impl TestCaseImpl for DynamicFieldTest {
 
     fn description(&self) -> &'static str {
         "Test dynamic field operations and RPC queries"
+    }
+
+    fn rpcs_tested(&self) -> Vec<&'static str> {
+        vec![
+            "unsafe_publish",
+            "unsafe_moveCall",
+            "sui_executeTransactionBlock",
+            "suix_getDynamicFields",
+            "suix_getDynamicFieldObject",
+        ]
     }
 
     async fn run(&self, ctx: &mut TestContext) -> Result<(), anyhow::Error> {
@@ -50,7 +61,8 @@ impl TestCaseImpl for DynamicFieldTest {
         ];
         let data = ctx
             .build_transaction_remotely("unsafe_publish", params)
-            .await?;
+            .await
+            .context("building publish transaction for object_basics")?;
         let response = ctx.sign_and_execute(data, "publish object_basics").await;
         let changes = response.object_changes.as_ref().unwrap();
 
@@ -83,7 +95,8 @@ impl TestCaseImpl for DynamicFieldTest {
                 rgp * 2_000_000,
                 None,
             )
-            .await?;
+            .await
+            .context("building move_call for create parent")?;
         let response = ctx.sign_and_execute(txn, "create parent object").await;
         let parent_id = response
             .effects
@@ -96,6 +109,7 @@ impl TestCaseImpl for DynamicFieldTest {
             .reference
             .object_id;
         ctx.let_fullnode_sync(vec![response.digest], 5).await;
+        info!("Parent object created: {}", parent_id);
 
         // Step 3: Create a child object
         info!("Creating child object");
@@ -115,7 +129,8 @@ impl TestCaseImpl for DynamicFieldTest {
                 rgp * 2_000_000,
                 None,
             )
-            .await?;
+            .await
+            .context("building move_call for create child")?;
         let response = ctx.sign_and_execute(txn, "create child object").await;
         let child_id = response
             .effects
@@ -128,6 +143,7 @@ impl TestCaseImpl for DynamicFieldTest {
             .reference
             .object_id;
         ctx.let_fullnode_sync(vec![response.digest], 5).await;
+        info!("Child object created: {}", child_id);
 
         // Step 4: Add the child as a dynamic object field on the parent
         info!("Adding dynamic object field");
@@ -147,10 +163,15 @@ impl TestCaseImpl for DynamicFieldTest {
                 rgp * 2_000_000,
                 None,
             )
-            .await?;
+            .await
+            .context("building move_call for add_ofield")?;
         let response = ctx.sign_and_execute(txn, "add dynamic object field").await;
         assert!(response.status_ok().unwrap());
         ctx.let_fullnode_sync(vec![response.digest], 5).await;
+        info!(
+            "Dynamic object field added: child {} on parent {}",
+            child_id, parent_id
+        );
 
         // Step 5: Query dynamic fields via RPC
         info!("Testing get_dynamic_fields RPC");
@@ -158,13 +179,13 @@ impl TestCaseImpl for DynamicFieldTest {
             .read_api()
             .get_dynamic_fields(parent_id, None, Some(10))
             .await
-            .expect("get_dynamic_fields should succeed");
+            .context("get_dynamic_fields")?;
         assert!(
             !dynamic_fields.data.is_empty(),
             "Parent should have at least one dynamic field"
         );
         info!(
-            "Found {} dynamic field(s) on parent",
+            "get_dynamic_fields verified: {} field(s) on parent",
             dynamic_fields.data.len()
         );
 
@@ -178,11 +199,12 @@ impl TestCaseImpl for DynamicFieldTest {
             .read_api()
             .get_dynamic_field_object(parent_id, field_name)
             .await
-            .expect("get_dynamic_field_object should succeed");
+            .context("get_dynamic_field_object")?;
         assert!(
             field_obj.data.is_some(),
             "Dynamic field object should exist"
         );
+        info!("get_dynamic_field_object verified: field exists");
 
         // Step 7: Remove the dynamic object field
         info!("Removing dynamic object field");
@@ -199,7 +221,8 @@ impl TestCaseImpl for DynamicFieldTest {
                 rgp * 2_000_000,
                 None,
             )
-            .await?;
+            .await
+            .context("building move_call for remove_ofield")?;
         let response = ctx
             .sign_and_execute(txn, "remove dynamic object field")
             .await;
@@ -211,11 +234,12 @@ impl TestCaseImpl for DynamicFieldTest {
             .read_api()
             .get_dynamic_fields(parent_id, None, Some(10))
             .await
-            .expect("get_dynamic_fields should succeed after removal");
+            .context("get_dynamic_fields after removal")?;
         assert!(
             dynamic_fields_after.data.is_empty(),
             "Parent should have no dynamic fields after removal"
         );
+        info!("Dynamic field removal verified: 0 fields remaining");
 
         Ok(())
     }

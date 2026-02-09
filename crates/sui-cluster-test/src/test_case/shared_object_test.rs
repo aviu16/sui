@@ -21,6 +21,10 @@ impl TestCaseImpl for SharedCounterTest {
         "Test publishing basics packages and incrementing Counter (shared object)"
     }
 
+    fn rpcs_tested(&self) -> Vec<&'static str> {
+        vec!["sui_executeTransactionBlock", "sui_getObject"]
+    }
+
     async fn run(&self, ctx: &mut TestContext) -> Result<(), anyhow::Error> {
         info!("Testing shared object transactions.");
 
@@ -88,6 +92,7 @@ impl TestCaseImpl for SharedCounterTest {
             counter_object.version, counter_version,
             "Expect sequence number to be 2"
         );
+        info!("Shared counter verified: version={}", counter_version);
 
         Ok(())
     }

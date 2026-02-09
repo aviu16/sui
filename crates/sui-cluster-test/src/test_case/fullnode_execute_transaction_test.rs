@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::{TestCaseImpl, TestContext};
+use anyhow::Context;
 use async_trait::async_trait;
 use sui_json_rpc_types::{
     SuiExecutionStatus, SuiTransactionBlockEffectsAPI, SuiTransactionBlockResponseOptions,
@@ -40,6 +41,18 @@ impl TestCaseImpl for FullNodeExecuteTransactionTest {
         "Test executing transaction via Fullnode Quorum Driver"
     }
 
+    fn rpcs_tested(&self) -> Vec<&'static str> {
+        vec![
+            "sui_executeTransactionBlock",
+            "sui_getTransactionBlock",
+            "suix_queryTransactionBlocks",
+            "sui_getLatestCheckpointSequenceNumber",
+            "sui_getCheckpoint",
+            "sui_getProtocolConfig",
+            "sui_getChainIdentifier",
+        ]
+    }
+
     async fn run(&self, ctx: &mut TestContext) -> Result<(), anyhow::Error> {
         let fullnode = ctx.get_fullnode_client();
 
@@ -49,7 +62,7 @@ impl TestCaseImpl for FullNodeExecuteTransactionTest {
             .read_api()
             .get_latest_checkpoint_sequence_number()
             .await
-            .expect("get_latest_checkpoint_sequence_number should succeed");
+            .context("get_latest_checkpoint_sequence_number")?;
         assert!(
             checkpoint_seq > 0,
             "Latest checkpoint sequence number should be > 0"
@@ -59,28 +72,37 @@ impl TestCaseImpl for FullNodeExecuteTransactionTest {
             .read_api()
             .get_checkpoint(checkpoint_seq.into())
             .await
-            .expect("get_checkpoint should succeed");
+            .context("get_checkpoint")?;
         assert_eq!(
             checkpoint.sequence_number, checkpoint_seq,
             "Checkpoint sequence number should match"
+        );
+        info!(
+            "Checkpoint verified: seq={}, digest={}",
+            checkpoint.sequence_number, checkpoint.digest
         );
 
         let protocol_config = fullnode
             .read_api()
             .get_protocol_config(None)
             .await
-            .expect("get_protocol_config should succeed");
+            .context("get_protocol_config")?;
         assert!(
             protocol_config.protocol_version > 0.into(),
             "Protocol version should be > 0"
+        );
+        info!(
+            "Protocol config verified: version={:?}",
+            protocol_config.protocol_version
         );
 
         let chain_id = fullnode
             .read_api()
             .get_chain_identifier()
             .await
-            .expect("get_chain_identifier should succeed");
+            .context("get_chain_identifier")?;
         assert!(!chain_id.is_empty(), "Chain identifier should not be empty");
+        info!("Chain identifier verified: {}", chain_id);
 
         let txn_count = 4;
         ctx.get_sui_from_faucet(Some(1)).await;
@@ -121,6 +143,7 @@ impl TestCaseImpl for FullNodeExecuteTransactionTest {
         // Verify fullnode observes the txn
         ctx.let_fullnode_sync(vec![txn_digest], 5).await;
         Self::verify_transaction(fullnode, txn_digest).await;
+        info!("WaitForEffectsCert verified: tx={}", txn_digest);
 
         info!("Test execution with WaitForLocalExecution");
         let txn = txns.swap_remove(0);
@@ -146,6 +169,7 @@ impl TestCaseImpl for FullNodeExecuteTransactionTest {
         }
         // Unlike in other execution modes, there's no need to wait for the node to sync
         Self::verify_transaction(fullnode, txn_digest).await;
+        info!("WaitForLocalExecution verified: tx={}", txn_digest);
 
         // Test suix_queryTransactionBlocks
         info!("Testing queryTransactionBlocks");
@@ -157,7 +181,7 @@ impl TestCaseImpl for FullNodeExecuteTransactionTest {
             .read_api()
             .query_transaction_blocks(query, None, Some(10), true)
             .await
-            .expect("query_transaction_blocks should succeed");
+            .context("query_transaction_blocks")?;
         assert!(
             !tx_page.data.is_empty(),
             "Should find at least one transaction from the sender"
@@ -165,6 +189,10 @@ impl TestCaseImpl for FullNodeExecuteTransactionTest {
         assert!(
             tx_page.data.iter().any(|tx| tx.digest == txn_digest),
             "Query results should include the just-executed transaction"
+        );
+        info!(
+            "queryTransactionBlocks verified: {} result(s)",
+            tx_page.data.len()
         );
 
         // Test response option completeness
@@ -182,7 +210,7 @@ impl TestCaseImpl for FullNodeExecuteTransactionTest {
                     .with_raw_input(),
             )
             .await
-            .expect("get_transaction_with_options with all options should succeed");
+            .context("get_transaction_with_options with all options")?;
         assert!(
             full_response.effects.is_some(),
             "Response should include effects"
@@ -202,6 +230,9 @@ impl TestCaseImpl for FullNodeExecuteTransactionTest {
         assert!(
             !full_response.raw_transaction.is_empty(),
             "Response should include raw_transaction from with_raw_input()"
+        );
+        info!(
+            "Response options verified: effects, object_changes, balance_changes, transaction, raw_transaction all present"
         );
 
         Ok(())

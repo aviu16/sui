@@ -31,6 +31,19 @@ impl TestCaseImpl for CoinIndexTest {
         "Test coin index"
     }
 
+    fn rpcs_tested(&self) -> Vec<&'static str> {
+        vec![
+            "suix_getBalance",
+            "suix_getAllBalances",
+            "suix_getCoins",
+            "suix_getAllCoins",
+            "suix_getCoinMetadata",
+            "suix_getOwnedObjects",
+            "sui_executeTransactionBlock",
+            "unsafe_publish",
+        ]
+    }
+
     async fn run(&self, ctx: &mut TestContext) -> Result<(), anyhow::Error> {
         let account = ctx.get_wallet_address();
         let client = ctx.clone_fullnode_client();
@@ -248,6 +261,7 @@ impl TestCaseImpl for CoinIndexTest {
         let sui_metadata = sui_metadata.expect("SUI metadata should exist");
         assert_eq!(sui_metadata.decimals, 9, "SUI should have 9 decimals");
         assert_eq!(sui_metadata.symbol, "SUI", "SUI symbol should be SUI");
+        info!("SUI metadata verified: decimals=9, symbol=SUI");
 
         info!("Testing getCoinMetadata for MANAGED coin");
         let managed_metadata = client
@@ -260,6 +274,7 @@ impl TestCaseImpl for CoinIndexTest {
             managed_metadata.decimals, 2,
             "MANAGED coin should have 2 decimals"
         );
+        info!("MANAGED metadata verified: decimals=2");
 
         // 4b. Test suix_getOwnedObjects
         info!("Testing getOwnedObjects");
@@ -271,6 +286,10 @@ impl TestCaseImpl for CoinIndexTest {
         assert!(
             !owned_objects.data.is_empty(),
             "Account should own at least one object after minting"
+        );
+        info!(
+            "getOwnedObjects verified: {} object(s) owned",
+            owned_objects.data.len()
         );
 
         // 5. Mint another MANAGED coin to account, balance 10

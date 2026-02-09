@@ -7,6 +7,7 @@ use jsonrpsee::rpc_params;
 use sui_json_rpc_types::SuiTransactionBlockEffectsAPI;
 use sui_move_build::test_utils::compile_basics_package;
 use sui_types::{base_types::ObjectID, object::Owner};
+use tracing::info;
 
 pub struct FullNodeBuildPublishTransactionTest;
 
@@ -18,6 +19,10 @@ impl TestCaseImpl for FullNodeBuildPublishTransactionTest {
 
     fn description(&self) -> &'static str {
         "Test building publish transaction via full node"
+    }
+
+    fn rpcs_tested(&self) -> Vec<&'static str> {
+        vec!["unsafe_publish", "sui_executeTransactionBlock"]
     }
 
     async fn run(&self, ctx: &mut TestContext) -> Result<(), anyhow::Error> {
@@ -39,14 +44,17 @@ impl TestCaseImpl for FullNodeBuildPublishTransactionTest {
             .build_transaction_remotely("unsafe_publish", params)
             .await?;
         let response = ctx.sign_and_execute(data, "publish basics package").await;
-        response
+        let created = response
             .effects
             .as_ref()
             .unwrap()
             .created()
             .iter()
             .find(|obj_ref| obj_ref.owner == Owner::Immutable)
-            .unwrap();
+            .unwrap()
+            .reference
+            .object_id;
+        info!("Package published: {}", created);
 
         Ok(())
     }

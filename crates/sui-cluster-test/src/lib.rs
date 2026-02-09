@@ -9,6 +9,7 @@ use helper::ObjectChecker;
 use jsonrpsee::core::params::ArrayParams;
 use jsonrpsee::{core::client::ClientT, http_client::HttpClientBuilder};
 use std::sync::Arc;
+use std::time::Instant;
 use sui_faucet::{CoinInfo, RequestStatus};
 use sui_json_rpc_types::{
     SuiExecutionStatus, SuiTransactionBlockEffectsAPI, SuiTransactionBlockResponse,
@@ -261,6 +262,13 @@ impl TestContext {
     }
 }
 
+struct TestResult {
+    name: &'static str,
+    passed: bool,
+    elapsed: std::time::Duration,
+    rpcs_tested: Vec<&'static str>,
+}
+
 pub struct TestCase<'a> {
     test_case: Box<dyn TestCaseImpl + 'a>,
 }
@@ -272,21 +280,31 @@ impl<'a> TestCase<'a> {
         }
     }
 
-    pub async fn run(self, ctx: &mut TestContext) -> bool {
+    async fn run(self, ctx: &mut TestContext) -> TestResult {
         let test_name = self.test_case.name();
+        let rpcs = self.test_case.rpcs_tested();
         info!("Running test {}.", test_name);
 
         // TODO: unwind panic and fail gracefully?
 
-        match self.test_case.run(ctx).await {
+        let start = Instant::now();
+        let passed = match self.test_case.run(ctx).await {
             Ok(()) => {
-                info!("Test {test_name} succeeded.");
+                let elapsed = start.elapsed();
+                info!("Test {test_name} succeeded in {elapsed:.1?}.");
                 true
             }
             Err(e) => {
-                error!("Test {test_name} failed with error: {e}.");
+                let elapsed = start.elapsed();
+                error!("Test {test_name} failed in {elapsed:.1?} with error: {e:#}.");
                 false
             }
+        };
+        TestResult {
+            name: test_name,
+            passed,
+            elapsed: start.elapsed(),
+            rpcs_tested: rpcs,
         }
     }
 }
@@ -296,12 +314,18 @@ pub trait TestCaseImpl {
     fn name(&self) -> &'static str;
     fn description(&self) -> &'static str;
     async fn run(&self, ctx: &mut TestContext) -> Result<(), anyhow::Error>;
+
+    /// RPC methods verified by this test, used for the summary report.
+    fn rpcs_tested(&self) -> Vec<&'static str> {
+        vec![]
+    }
 }
 
 pub struct ClusterTest;
 
 impl ClusterTest {
     pub async fn run(options: ClusterTestOpt) {
+        let suite_start = Instant::now();
         let mut ctx = TestContext::setup(options)
             .await
             .unwrap_or_else(|e| panic!("Failed to set up TestContext, e: {e}"));
@@ -323,16 +347,51 @@ impl ClusterTest {
 
         // TODO: improve the runner parallelism for efficiency
         // For now we run tests serially
-        let mut success_cnt = 0;
-        let total_cnt = tests.len() as i32;
+        let total_cnt = tests.len();
+        let mut results: Vec<TestResult> = Vec::with_capacity(total_cnt);
         for t in tests {
-            let is_success = t.run(&mut ctx).await as i32;
-            success_cnt += is_success;
+            results.push(t.run(&mut ctx).await);
         }
+        let suite_elapsed = suite_start.elapsed();
+
+        // Print results summary
+        let success_cnt = results.iter().filter(|r| r.passed).count();
+        info!("");
+        info!("=== Test Results ===");
+        for r in &results {
+            let status = if r.passed { "PASS" } else { "FAIL" };
+            info!("  [{status}] {:40} ({:.1?})", r.name, r.elapsed);
+        }
+        info!("");
+        info!("{success_cnt} of {total_cnt} tests passed in {suite_elapsed:.1?}.");
+
+        // Print RPC coverage summary from passing tests
+        let mut verified_rpcs: Vec<&str> = results
+            .iter()
+            .filter(|r| r.passed)
+            .flat_map(|r| r.rpcs_tested.iter().copied())
+            .collect();
+        verified_rpcs.sort_unstable();
+        verified_rpcs.dedup();
+
+        if !verified_rpcs.is_empty() {
+            info!("");
+            info!("=== Verified RPC Methods ({}) ===", verified_rpcs.len());
+            for rpc in &verified_rpcs {
+                info!("  {rpc}");
+            }
+        }
+
         if success_cnt < total_cnt {
-            // If any test failed, panic to bubble up the signal
-            panic!("{success_cnt} of {total_cnt} tests passed.");
+            let failed: Vec<&str> = results
+                .iter()
+                .filter(|r| !r.passed)
+                .map(|r| r.name)
+                .collect();
+            panic!(
+                "{success_cnt} of {total_cnt} tests passed. Failed: {}",
+                failed.join(", ")
+            );
         }
-        info!("{success_cnt} of {total_cnt} tests passed.");
     }
 }
