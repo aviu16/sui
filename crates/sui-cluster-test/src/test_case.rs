@@ -1,12 +1,14 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+pub mod checkpoint_transaction_test;
 pub mod coin_index_test;
 pub mod coin_merge_split_test;
 pub mod dynamic_field_test;
 pub mod event_query_test;
 pub mod fullnode_build_publish_transaction_test;
 pub mod fullnode_execute_transaction_test;
+pub mod governance_staking_test;
 pub mod native_transfer_test;
 pub mod package_upgrade_test;
 pub mod ptb_test;

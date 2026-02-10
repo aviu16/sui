@@ -29,12 +29,14 @@ use sui_types::{
     transaction::{Transaction, TransactionData},
 };
 use test_case::{
-    coin_index_test::CoinIndexTest, coin_merge_split_test::CoinMergeSplitTest,
-    dynamic_field_test::DynamicFieldTest, event_query_test::EventQueryTest,
+    checkpoint_transaction_test::CheckpointTransactionTest, coin_index_test::CoinIndexTest,
+    coin_merge_split_test::CoinMergeSplitTest, dynamic_field_test::DynamicFieldTest,
+    event_query_test::EventQueryTest,
     fullnode_build_publish_transaction_test::FullNodeBuildPublishTransactionTest,
     fullnode_execute_transaction_test::FullNodeExecuteTransactionTest,
-    native_transfer_test::NativeTransferTest, package_upgrade_test::PackageUpgradeTest,
-    ptb_test::PtbTest, random_beacon_test::RandomBeaconTest, shared_object_test::SharedCounterTest,
+    governance_staking_test::GovernanceStakingTest, native_transfer_test::NativeTransferTest,
+    package_upgrade_test::PackageUpgradeTest, ptb_test::PtbTest,
+    random_beacon_test::RandomBeaconTest, shared_object_test::SharedCounterTest,
 };
 use tokio::time::{self, Duration};
 use tracing::{error, info};
@@ -357,6 +359,8 @@ impl ClusterTest {
             TestCase::new(EventQueryTest {}),
             TestCase::new(PackageUpgradeTest {}),
             TestCase::new(DynamicFieldTest {}),
+            TestCase::new(CheckpointTransactionTest {}),
+            TestCase::new(GovernanceStakingTest {}),
         ];
 
         // TODO: improve the runner parallelism for efficiency
