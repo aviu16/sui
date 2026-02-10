@@ -316,8 +316,7 @@ pub struct ExecutionIndicesWithStatsV2 {
     pub height: u64,
     pub stats: ConsensusStats,
     pub last_checkpoint_flush_timestamp: u64,
-    // Reserved for future use.
-    pub checkpoint_seq: u64,
+    pub next_checkpoint_seq: u64,
 }
 
 impl From<ExecutionIndicesWithStats> for ExecutionIndicesWithStatsV2 {
@@ -327,7 +326,7 @@ impl From<ExecutionIndicesWithStats> for ExecutionIndicesWithStatsV2 {
             height: v1.height,
             stats: v1.stats,
             last_checkpoint_flush_timestamp: 0,
-            checkpoint_seq: 0,
+            next_checkpoint_seq: 0,
         }
     }
 }
@@ -466,6 +465,13 @@ pub struct AuthorityPerEpochStore {
     /// Waiters for barrier transactions. Used by execution scheduler to wait for
     /// barrier transaction (keyed by the same AccumulatorSettlement key as settlements).
     barrier_registrations: Arc<Mutex<HashMap<TransactionKey, BarrierRegistration>>>,
+
+    /// Maps settlement key to batch transaction info for early settlement.
+    settlement_batch_info: Arc<Mutex<HashMap<TransactionKey, SettlementBatchInfo>>>,
+
+    /// Settlement results computed by the execution scheduler for checkpoint builder consumption.
+    settlement_result_registrations:
+        Arc<Mutex<HashMap<TransactionKey, SettlementResultRegistration>>>,
 }
 enum SettlementRegistration {
     Ready(Vec<VerifiedExecutableTransaction>),
@@ -474,6 +480,23 @@ enum SettlementRegistration {
 enum BarrierRegistration {
     Ready(Box<VerifiedExecutableTransaction>),
     Waiting(oneshot::Sender<VerifiedExecutableTransaction>),
+}
+
+pub struct SettlementBatchInfo {
+    pub tx_keys: Vec<TransactionKey>,
+    pub checkpoint_height: u64,
+    pub tx_index_offset: u64,
+    pub checkpoint_seq: u64,
+}
+
+pub struct SettlementResult {
+    pub settlement_effects: Vec<TransactionEffects>,
+    pub funds_settlement: crate::execution_scheduler::funds_withdraw_scheduler::FundsSettlement,
+}
+
+enum SettlementResultRegistration {
+    Ready(SettlementResult),
+    Waiting(oneshot::Sender<SettlementResult>),
 }
 
 /// AuthorityEpochTables contains tables that contain data that is only valid within an epoch.
@@ -972,6 +995,12 @@ impl AuthorityEpochTables {
             .map(Into::into))
     }
 
+    pub fn get_last_consensus_stats_v2(&self) -> SuiResult<Option<ExecutionIndicesWithStatsV2>> {
+        Ok(self
+            .last_consensus_stats_v2
+            .get(&LAST_CONSENSUS_STATS_ADDR)?)
+    }
+
     pub fn get_locked_transaction(&self, obj_ref: &ObjectRef) -> SuiResult<Option<LockDetails>> {
         Ok(self
             .owned_object_locked_transactions
@@ -1315,6 +1344,8 @@ impl AuthorityPerEpochStore {
             finalized_transactions_cache,
             settlement_registrations: Default::default(),
             barrier_registrations: Default::default(),
+            settlement_batch_info: Default::default(),
+            settlement_result_registrations: Default::default(),
         });
 
         s.update_buffer_stake_metric();
@@ -2051,6 +2082,61 @@ impl AuthorityPerEpochStore {
         rx.await.unwrap()
     }
 
+    pub(crate) fn store_settlement_batch_info(
+        &self,
+        tx_key: TransactionKey,
+        batch_info: SettlementBatchInfo,
+    ) {
+        debug_assert!(matches!(tx_key, TransactionKey::AccumulatorSettlement(..)));
+        info!("CLAUDE: store_settlement_batch_info key={:?}", tx_key);
+        self.settlement_batch_info.lock().insert(tx_key, batch_info);
+    }
+
+    pub(crate) fn take_settlement_batch_info(
+        &self,
+        tx_key: &TransactionKey,
+    ) -> Option<SettlementBatchInfo> {
+        debug_assert!(matches!(tx_key, TransactionKey::AccumulatorSettlement(..)));
+        let result = self.settlement_batch_info.lock().remove(tx_key);
+        info!("CLAUDE: take_settlement_batch_info key={:?} found={}", tx_key, result.is_some());
+        result
+    }
+
+    pub(crate) fn notify_settlement_result_ready(
+        &self,
+        tx_key: TransactionKey,
+        result: SettlementResult,
+    ) {
+        debug_assert!(matches!(tx_key, TransactionKey::AccumulatorSettlement(..)));
+        let mut registrations = self.settlement_result_registrations.lock();
+        if let Some(registration) = registrations.remove(&tx_key) {
+            let SettlementResultRegistration::Waiting(tx) = registration else {
+                fatal!("Settlement result registration should be waiting");
+            };
+            tx.send(result).ok();
+        } else {
+            registrations.insert(tx_key, SettlementResultRegistration::Ready(result));
+        }
+    }
+
+    pub(crate) async fn wait_for_settlement_result(&self, key: TransactionKey) -> SettlementResult {
+        let rx = {
+            let mut registrations = self.settlement_result_registrations.lock();
+            if let Some(registration) = registrations.remove(&key) {
+                let SettlementResultRegistration::Ready(result) = registration else {
+                    fatal!("Settlement result registration should be ready");
+                };
+                return result;
+            } else {
+                let (tx, rx) = oneshot::channel();
+                registrations.insert(key, SettlementResultRegistration::Waiting(tx));
+                rx
+            }
+        };
+
+        rx.await.unwrap()
+    }
+
     pub fn insert_effects_digest_and_signature(
         &self,
         tx_digest: &TransactionDigest,
@@ -2242,6 +2328,14 @@ impl AuthorityPerEpochStore {
             .tables()?
             .get_last_consensus_stats()?
             .unwrap_or_default())
+    }
+
+    pub fn get_last_consensus_stats_v2(&self) -> SuiResult<Option<ExecutionIndicesWithStatsV2>> {
+        assert!(
+            self.consensus_quarantine.read().is_empty(),
+            "get_last_consensus_stats_v2 should only be called at startup"
+        );
+        self.tables()?.get_last_consensus_stats_v2()
     }
 
     pub fn get_accumulators_in_checkpoint_range(

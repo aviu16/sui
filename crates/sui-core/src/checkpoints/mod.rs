@@ -1,7 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-mod causal_order;
+pub(crate) mod causal_order;
 pub mod checkpoint_executor;
 mod checkpoint_output;
 mod metrics;
@@ -113,6 +113,9 @@ pub struct PendingCheckpointInfo {
     // Consensus commit ref and rejected transactions digest which corresponds to this checkpoint.
     pub consensus_commit_ref: CommitRef,
     pub rejected_transactions_digest: Digest,
+    // Pre-assigned checkpoint sequence number from consensus handler.
+    // Only set when settle_early_in_consensus_handler is enabled.
+    pub checkpoint_seq: Option<CheckpointSequenceNumber>,
 }
 
 #[derive(Clone, Debug)]
@@ -1515,7 +1518,14 @@ impl CheckpointBuilder {
             )
             .await?;
         let highest_sequence = *new_checkpoints.last().0.sequence_number();
-        if highest_sequence <= highest_executed_sequence && poll_count > 1 {
+        let early_settlement_enabled = self
+            .epoch_store
+            .protocol_config()
+            .settle_early_in_consensus_handler();
+        if highest_sequence <= highest_executed_sequence
+            && poll_count > 1
+            && !early_settlement_enabled
+        {
             debug_fatal!(
                 "resolve_checkpoint_transactions should be instantaneous when executed checkpoint is ahead of checkpoint builder"
             );
@@ -1565,7 +1575,11 @@ impl CheckpointBuilder {
         assert_eq!(new_checkpoints.len(), 1, "Expected exactly one checkpoint");
         let sequence = *new_checkpoints.first().0.sequence_number();
         let digest = new_checkpoints.first().0.digest();
-        if sequence <= highest_executed_sequence && poll_count > 1 {
+        let early_settlement_enabled = self
+            .epoch_store
+            .protocol_config()
+            .settle_early_in_consensus_handler();
+        if sequence <= highest_executed_sequence && poll_count > 1 && !early_settlement_enabled {
             debug_fatal!(
                 "resolve_checkpoint_transactions should be instantaneous when executed checkpoint is ahead of checkpoint builder"
             );
@@ -1980,16 +1994,30 @@ impl CheckpointBuilder {
             }
             sorted.extend(CausalOrder::causal_sort(unsorted));
 
-            if checkpoint_roots.settlement_root.is_some() {
-                let (tx_key, settlement_effects) = self
-                    .construct_and_execute_settlement_transactions(
-                        &sorted,
-                        checkpoint_roots.height,
-                        next_checkpoint_seq,
-                        tx_index_offset,
-                    )
-                    .await;
-                debug!(?tx_key, "executed settlement transactions");
+            if let Some(settlement_key) = &checkpoint_roots.settlement_root {
+                let settlement_effects = if self
+                    .epoch_store
+                    .protocol_config()
+                    .settle_early_in_consensus_handler()
+                {
+                    let result = self
+                        .epoch_store
+                        .wait_for_settlement_result(*settlement_key)
+                        .await;
+                    debug!(?settlement_key, "received early settlement result");
+                    result.settlement_effects
+                } else {
+                    let (tx_key, settlement_effects) = self
+                        .construct_and_execute_settlement_transactions(
+                            &sorted,
+                            checkpoint_roots.height,
+                            next_checkpoint_seq,
+                            tx_index_offset,
+                        )
+                        .await;
+                    debug!(?tx_key, "executed settlement transactions");
+                    settlement_effects
+                };
 
                 sorted.extend(settlement_effects);
             }
@@ -2200,7 +2228,7 @@ impl CheckpointBuilder {
         Ok(chunks)
     }
 
-    fn load_last_built_checkpoint_summary(
+    pub fn load_last_built_checkpoint_summary(
         epoch_store: &AuthorityPerEpochStore,
         store: &CheckpointStore,
     ) -> SuiResult<Option<(CheckpointSequenceNumber, CheckpointSummary)>> {
@@ -2237,9 +2265,10 @@ impl CheckpointBuilder {
         let mut last_checkpoint =
             Self::load_last_built_checkpoint_summary(&self.epoch_store, &self.store)?;
         let last_checkpoint_seq = last_checkpoint.as_ref().map(|(seq, _)| *seq);
+        let next_checkpoint_seq = last_checkpoint_seq.unwrap_or_default() + 1;
         debug!(
             checkpoint_commit_height = details.checkpoint_height,
-            next_checkpoint_seq = last_checkpoint_seq.unwrap_or_default() + 1,
+            next_checkpoint_seq = next_checkpoint_seq,
             checkpoint_timestamp = details.timestamp_ms,
             "Creating checkpoint(s) for {} transactions",
             all_effects.len(),
@@ -2370,10 +2399,14 @@ impl CheckpointBuilder {
             }
             let last_checkpoint_of_epoch = details.last_of_epoch && index == chunks_count - 1;
 
-            let sequence_number = last_checkpoint
-                .as_ref()
-                .map(|(_, c)| c.sequence_number + 1)
-                .unwrap_or_default();
+            let sequence_number = if let Some(preassigned_seq) = details.checkpoint_seq {
+                preassigned_seq
+            } else {
+                last_checkpoint
+                    .as_ref()
+                    .map(|(_, c)| c.sequence_number + 1)
+                    .unwrap_or_default()
+            };
             let mut timestamp_ms = details.timestamp_ms;
             if let Some((_, last_checkpoint)) = &last_checkpoint
                 && last_checkpoint.timestamp_ms > timestamp_ms
@@ -3581,6 +3614,10 @@ impl CheckpointService {
 }
 
 impl CheckpointService {
+    pub fn checkpoint_store(&self) -> &Arc<CheckpointStore> {
+        &self.tables
+    }
+
     /// Waits until all checkpoints had been built before the node restarted
     /// are rebuilt. This is required to preserve the invariant that all checkpoints
     /// (and their transactions) below the highest_synced_checkpoint watermark are
@@ -4260,6 +4297,7 @@ mod tests {
                 checkpoint_height: i,
                 consensus_commit_ref: CommitRef::default(),
                 rejected_transactions_digest: Digest::default(),
+                checkpoint_seq: None,
             },
         }
     }
