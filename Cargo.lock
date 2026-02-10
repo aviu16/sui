@@ -14299,6 +14299,7 @@ version = "1.66.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "bcs",
  "clap",
  "derive_more 1.0.0",
  "fastcrypto",
@@ -14317,6 +14318,7 @@ dependencies = [
  "sui-json-rpc-types",
  "sui-keys",
  "sui-move-build",
+ "sui-rpc-api",
  "sui-sdk",
  "sui-swarm",
  "sui-swarm-config",

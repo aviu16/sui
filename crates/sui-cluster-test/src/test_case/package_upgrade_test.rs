@@ -4,14 +4,12 @@
 use crate::{TestCaseImpl, TestContext};
 use anyhow::Context;
 use async_trait::async_trait;
-use jsonrpsee::rpc_params;
 use move_core_types::identifier::Identifier;
-use sui_json_rpc_types::ObjectChange;
 use sui_move_build::test_utils::compile_example_package;
+use sui_test_transaction_builder::{PublishData, TestTransactionBuilder};
 use sui_types::SUI_FRAMEWORK_PACKAGE_ID;
-use sui_types::base_types::ObjectID;
+use sui_types::effects::TransactionEffectsAPI;
 use sui_types::move_package::UpgradePolicy;
-use sui_types::object::Owner;
 use sui_types::programmable_transaction_builder::ProgrammableTransactionBuilder;
 use sui_types::transaction::{ObjectArg, TransactionData};
 use tracing::info;
@@ -28,69 +26,40 @@ impl TestCaseImpl for PackageUpgradeTest {
         "Test publishing a Move package and upgrading it"
     }
 
-    fn rpcs_tested(&self) -> Vec<&'static str> {
-        vec![
-            "unsafe_publish",
-            "sui_executeTransactionBlock",
-            "sui_getObject",
-        ]
-    }
-
     async fn run(&self, ctx: &mut TestContext) -> Result<(), anyhow::Error> {
         info!("Testing package publish and upgrade");
 
         ctx.get_sui_from_faucet(Some(1)).await;
         let sender = ctx.get_wallet_address();
-        let rgp = ctx.get_reference_gas_price().await;
+        let wallet = ctx.get_wallet();
+        let rgp = ctx.get_grpc_client().get_reference_gas_price().await?;
 
         // Step 1: Compile and publish the base package
         info!("Publishing base package (move_upgrade/base)");
         let base_compiled =
             compile_example_package("../../crates/sui-core/src/unit_tests/data/move_upgrade/base")
                 .await;
-        let base_module_bytes =
-            base_compiled.get_package_base64(/* with_unpublished_deps */ false);
-        let base_deps = base_compiled.get_dependency_storage_package_ids();
 
-        let params = rpc_params![
-            sender,
-            base_module_bytes,
-            base_deps,
-            None::<ObjectID>,
-            500_000_000u64.to_string()
-        ];
-        let data = ctx
-            .build_transaction_remotely("unsafe_publish", params)
+        let gas_obj = wallet
+            .get_one_gas_object_owned_by_address(sender)
             .await
-            .context("building publish transaction for base package")?;
-        let response = ctx.sign_and_execute(data, "publish base package").await;
-        let changes = response.object_changes.as_ref().unwrap();
+            .context("fetching gas object for publish")?
+            .expect("Should have a gas object");
 
-        // Find the published package
-        let package_id = changes
-            .iter()
-            .find_map(|change| match change {
-                ObjectChange::Published { package_id, .. } => Some(*package_id),
-                _ => None,
-            })
+        let tx_data = TestTransactionBuilder::new(sender, gas_obj, rgp)
+            .publish_with_data(PublishData::CompiledPackage(base_compiled))
+            .build();
+        let response = ctx
+            .grpc_sign_and_execute(tx_data, "publish base package")
+            .await;
+
+        let package_ref = response
+            .get_new_package_obj()
             .expect("Should find published package");
+        let package_id = package_ref.0;
 
-        // Find the UpgradeCap (owned object with type UpgradeCap)
-        let upgrade_cap_ref = changes
-            .iter()
-            .find_map(|change| match change {
-                ObjectChange::Created {
-                    owner: Owner::AddressOwner(_),
-                    object_type,
-                    object_id,
-                    version,
-                    digest,
-                    ..
-                } if object_type.name.as_str() == "UpgradeCap" => {
-                    Some((*object_id, *version, *digest))
-                }
-                _ => None,
-            })
+        let upgrade_cap_ref = response
+            .get_new_package_upgrade_cap()
             .expect("Should find UpgradeCap");
 
         info!(
@@ -98,7 +67,8 @@ impl TestCaseImpl for PackageUpgradeTest {
             package_id, upgrade_cap_ref.0
         );
 
-        ctx.let_fullnode_sync(vec![response.digest], 5).await;
+        let tx_digest = *response.effects.transaction_digest();
+        ctx.let_fullnode_sync(vec![tx_digest], 5).await;
 
         // Step 2: Compile the upgrade package and perform upgrade
         info!("Upgrading to stage1_basic_compatibility_valid");
@@ -143,7 +113,6 @@ impl TestCaseImpl for PackageUpgradeTest {
         let pt = builder.finish();
 
         // Get a gas object for the upgrade transaction
-        let wallet = ctx.get_wallet();
         let gas_obj = wallet
             .get_one_gas_object_owned_by_address(sender)
             .await
@@ -152,36 +121,25 @@ impl TestCaseImpl for PackageUpgradeTest {
 
         let tx_data =
             TransactionData::new_programmable(sender, vec![gas_obj], pt, rgp * 5_000_000, rgp);
-        let response = ctx.sign_and_execute(tx_data, "upgrade package").await;
+        let response = ctx.grpc_sign_and_execute(tx_data, "upgrade package").await;
 
         // Verify the upgrade created a new package version
-        let upgrade_changes = response.object_changes.as_ref().unwrap();
-        let new_package_id = upgrade_changes
-            .iter()
-            .find_map(|change| match change {
-                ObjectChange::Published { package_id, .. } => Some(*package_id),
-                _ => None,
-            })
+        let new_package_ref = response
+            .get_new_package_obj()
             .expect("Upgrade should create a new package version");
+        let new_package_id = new_package_ref.0;
 
         info!("Package upgraded: {} -> {}", package_id, new_package_id);
 
-        ctx.let_fullnode_sync(vec![response.digest], 5).await;
+        let tx_digest = *response.effects.transaction_digest();
+        ctx.let_fullnode_sync(vec![tx_digest], 5).await;
 
-        // Verify the new package exists on the fullnode
-        let new_pkg_obj = ctx
-            .get_fullnode_client()
-            .read_api()
-            .get_object_with_options(
-                new_package_id,
-                sui_json_rpc_types::SuiObjectDataOptions::new().with_owner(),
-            )
+        // Verify the new package exists on the fullnode via gRPC
+        let mut grpc = ctx.get_grpc_client();
+        let _new_pkg = grpc
+            .get_object(new_package_id)
             .await
             .context("reading upgraded package from fullnode")?;
-        assert!(
-            new_pkg_obj.data.is_some(),
-            "Upgraded package should exist on fullnode"
-        );
         info!("Upgraded package verified on fullnode");
 
         Ok(())

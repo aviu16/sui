@@ -8,7 +8,6 @@ use sui_json_rpc_types::{
     SuiExecutionStatus, SuiTransactionBlockEffectsAPI, SuiTransactionBlockResponseOptions,
     SuiTransactionBlockResponseQuery, TransactionFilter,
 };
-use sui_sdk::SuiClient;
 use sui_types::{
     base_types::TransactionDigest, transaction_driver_types::ExecuteTransactionRequestType,
 };
@@ -17,17 +16,14 @@ use tracing::info;
 pub struct FullNodeExecuteTransactionTest;
 
 impl FullNodeExecuteTransactionTest {
-    async fn verify_transaction(fullnode: &SuiClient, tx_digest: TransactionDigest) {
-        fullnode
-            .read_api()
-            .get_transaction_with_options(tx_digest, SuiTransactionBlockResponseOptions::new())
-            .await
-            .unwrap_or_else(|e| {
-                panic!(
-                    "Failed get transaction {:?} from fullnode: {:?}",
-                    tx_digest, e
-                )
-            });
+    async fn verify_transaction(ctx: &TestContext, tx_digest: TransactionDigest) {
+        let mut grpc = ctx.get_grpc_client();
+        grpc.get_transaction(&tx_digest).await.unwrap_or_else(|e| {
+            panic!(
+                "Failed get transaction {:?} from fullnode: {:?}",
+                tx_digest, e
+            )
+        });
     }
 }
 
@@ -42,67 +38,48 @@ impl TestCaseImpl for FullNodeExecuteTransactionTest {
     }
 
     fn rpcs_tested(&self) -> Vec<&'static str> {
-        vec![
-            "sui_executeTransactionBlock",
-            "sui_getTransactionBlock",
-            "suix_queryTransactionBlocks",
-            "sui_getLatestCheckpointSequenceNumber",
-            "sui_getCheckpoint",
-            "sui_getProtocolConfig",
-            "sui_getChainIdentifier",
-        ]
+        vec!["sui_executeTransactionBlock", "suix_queryTransactionBlocks"]
     }
 
     async fn run(&self, ctx: &mut TestContext) -> Result<(), anyhow::Error> {
-        let fullnode = ctx.get_fullnode_client();
+        // Test checkpoint and protocol queries via gRPC
+        info!("Testing checkpoint and protocol queries via gRPC");
+        let mut grpc = ctx.get_grpc_client();
 
-        // Test checkpoint and protocol queries (no transaction needed)
-        info!("Testing checkpoint and protocol queries");
-        let checkpoint_seq = fullnode
-            .read_api()
-            .get_latest_checkpoint_sequence_number()
+        let checkpoint = grpc
+            .get_latest_checkpoint()
             .await
-            .context("get_latest_checkpoint_sequence_number")?;
+            .context("get_latest_checkpoint")?;
         assert!(
-            checkpoint_seq > 0,
+            checkpoint.sequence_number > 0,
             "Latest checkpoint sequence number should be > 0"
-        );
-
-        let checkpoint = fullnode
-            .read_api()
-            .get_checkpoint(checkpoint_seq.into())
-            .await
-            .context("get_checkpoint")?;
-        assert_eq!(
-            checkpoint.sequence_number, checkpoint_seq,
-            "Checkpoint sequence number should match"
         );
         info!(
             "Checkpoint verified: seq={}, digest={}",
-            checkpoint.sequence_number, checkpoint.digest
+            checkpoint.sequence_number,
+            checkpoint.digest()
         );
 
-        let protocol_config = fullnode
-            .read_api()
+        let protocol_config = grpc
             .get_protocol_config(None)
             .await
             .context("get_protocol_config")?;
-        assert!(
-            protocol_config.protocol_version > 0.into(),
-            "Protocol version should be > 0"
-        );
-        info!(
-            "Protocol config verified: version={:?}",
-            protocol_config.protocol_version
-        );
+        let protocol_version = protocol_config
+            .protocol_version
+            .expect("Protocol version should be present");
+        assert!(protocol_version > 0, "Protocol version should be > 0");
+        info!("Protocol config verified: version={}", protocol_version);
 
-        let chain_id = fullnode
-            .read_api()
+        let chain_id = grpc
             .get_chain_identifier()
             .await
             .context("get_chain_identifier")?;
-        assert!(!chain_id.is_empty(), "Chain identifier should not be empty");
-        info!("Chain identifier verified: {}", chain_id);
+        let chain_id_str = chain_id.to_string();
+        assert!(
+            !chain_id_str.is_empty(),
+            "Chain identifier should not be empty"
+        );
+        info!("Chain identifier verified: {}", chain_id_str);
 
         let txn_count = 4;
         ctx.get_sui_from_faucet(Some(1)).await;
@@ -142,7 +119,7 @@ impl TestCaseImpl for FullNodeExecuteTransactionTest {
         }
         // Verify fullnode observes the txn
         ctx.let_fullnode_sync(vec![txn_digest], 5).await;
-        Self::verify_transaction(fullnode, txn_digest).await;
+        Self::verify_transaction(ctx, txn_digest).await;
         info!("WaitForEffectsCert verified: tx={}", txn_digest);
 
         info!("Test execution with WaitForLocalExecution");
@@ -168,10 +145,10 @@ impl TestCaseImpl for FullNodeExecuteTransactionTest {
             )
         }
         // Unlike in other execution modes, there's no need to wait for the node to sync
-        Self::verify_transaction(fullnode, txn_digest).await;
+        Self::verify_transaction(ctx, txn_digest).await;
         info!("WaitForLocalExecution verified: tx={}", txn_digest);
 
-        // Test suix_queryTransactionBlocks
+        // Test suix_queryTransactionBlocks (JSON-RPC only, no gRPC equivalent)
         info!("Testing queryTransactionBlocks");
         let sender = ctx.get_wallet_address();
         let query = SuiTransactionBlockResponseQuery::new_with_filter(
@@ -195,7 +172,7 @@ impl TestCaseImpl for FullNodeExecuteTransactionTest {
             tx_page.data.len()
         );
 
-        // Test response option completeness
+        // Test response option completeness (JSON-RPC specific)
         info!("Testing transaction response with all options enabled");
         let full_response = fullnode
             .read_api()

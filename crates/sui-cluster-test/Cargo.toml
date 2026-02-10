@@ -18,6 +18,7 @@ clap.workspace = true
 reqwest.workspace = true
 async-trait.workspace = true
 anyhow = { workspace = true, features = ["backtrace"] }
+bcs.workspace = true
 uuid.workspace = true
 prometheus.workspace = true
 fastcrypto.workspace = true
@@ -36,6 +37,7 @@ sui-core.workspace = true
 sui-json.workspace = true
 sui-config.workspace = true
 sui-test-transaction-builder.workspace = true
+sui-rpc-api.workspace = true
 telemetry-subscribers.workspace = true
 
 test-cluster.workspace = true

@@ -4,11 +4,11 @@
 use crate::{TestCaseImpl, TestContext};
 use anyhow::Context;
 use async_trait::async_trait;
-use sui_json_rpc_types::SuiTransactionBlockEffectsAPI;
 use sui_sdk::wallet_context::WalletContext;
 use sui_test_transaction_builder::TestTransactionBuilder;
+use sui_types::base_types::SuiAddress;
 use sui_types::crypto::{AccountKeyPair, get_key_pair};
-use sui_types::object::Owner;
+use sui_types::effects::TransactionEffectsAPI;
 use tracing::info;
 
 pub struct PtbTest;
@@ -23,10 +23,6 @@ impl TestCaseImpl for PtbTest {
         "Test executing a programmable transaction block with multiple operations"
     }
 
-    fn rpcs_tested(&self) -> Vec<&'static str> {
-        vec!["sui_executeTransactionBlock"]
-    }
-
     async fn run(&self, ctx: &mut TestContext) -> Result<(), anyhow::Error> {
         info!("Testing programmable transaction block execution");
 
@@ -35,7 +31,7 @@ impl TestCaseImpl for PtbTest {
 
         let wallet: &WalletContext = ctx.get_wallet();
         let sender = ctx.get_wallet_address();
-        let rgp = ctx.get_reference_gas_price().await;
+        let rgp = ctx.get_grpc_client().get_reference_gas_price().await?;
         let (recipient, _): (_, AccountKeyPair) = get_key_pair();
 
         // Get a gas object for the PTB
@@ -50,22 +46,24 @@ impl TestCaseImpl for PtbTest {
             .transfer_sui(Some(1000), recipient)
             .build();
 
-        let response = ctx.sign_and_execute(tx_data, "PTB transfer").await;
+        let response = ctx.grpc_sign_and_execute(tx_data, "PTB transfer").await;
 
-        let effects = response.effects.as_ref().unwrap();
+        let effects = &response.effects;
         assert!(
             !effects.mutated().is_empty() || !effects.created().is_empty(),
             "PTB should have mutated or created objects"
         );
 
         // Verify fullnode observes the txn
-        ctx.let_fullnode_sync(vec![response.digest], 5).await;
+        let tx_digest = *effects.transaction_digest();
+        ctx.let_fullnode_sync(vec![tx_digest], 5).await;
 
         // Verify the recipient received funds
-        let balance_changes = response.balance_changes.as_ref().unwrap();
-        let recipient_change = balance_changes
+        let recipient_addr: SuiAddress = recipient;
+        let recipient_change = response
+            .balance_changes
             .iter()
-            .find(|b| b.owner == Owner::AddressOwner(recipient));
+            .find(|b| SuiAddress::from(b.address) == recipient_addr);
         assert!(
             recipient_change.is_some(),
             "Recipient should have a balance change"
@@ -93,16 +91,17 @@ impl TestCaseImpl for PtbTest {
             .build();
 
         let response = ctx
-            .sign_and_execute(tx_data, "PTB transfer to second recipient")
+            .grpc_sign_and_execute(tx_data, "PTB transfer to second recipient")
             .await;
 
-        let effects = response.effects.as_ref().unwrap();
+        let effects = &response.effects;
         assert!(
             !effects.created().is_empty(),
             "Transfer should create a new coin for the recipient"
         );
 
-        ctx.let_fullnode_sync(vec![response.digest], 5).await;
+        let tx_digest = *effects.transaction_digest();
+        ctx.let_fullnode_sync(vec![tx_digest], 5).await;
         info!(
             "Second PTB verified: {} object(s) created for recipient2",
             effects.created().len()

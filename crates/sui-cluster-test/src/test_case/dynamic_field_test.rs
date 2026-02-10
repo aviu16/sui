@@ -6,12 +6,12 @@ use anyhow::Context;
 use async_trait::async_trait;
 use move_core_types::language_storage::TypeTag;
 use serde_json::json;
-use sui_json::SuiJsonValue;
-use sui_json_rpc_types::{ObjectChange, SuiTransactionBlockEffectsAPI};
 use sui_move_build::test_utils::compile_example_package;
-use sui_types::base_types::ObjectID;
+use sui_test_transaction_builder::{PublishData, TestTransactionBuilder};
 use sui_types::dynamic_field::DynamicFieldName;
+use sui_types::effects::TransactionEffectsAPI;
 use sui_types::object::Owner;
+use sui_types::transaction::{CallArg, ObjectArg};
 use tracing::info;
 
 pub struct DynamicFieldTest;
@@ -27,13 +27,7 @@ impl TestCaseImpl for DynamicFieldTest {
     }
 
     fn rpcs_tested(&self) -> Vec<&'static str> {
-        vec![
-            "unsafe_publish",
-            "unsafe_moveCall",
-            "sui_executeTransactionBlock",
-            "suix_getDynamicFields",
-            "suix_getDynamicFieldObject",
-        ]
+        vec!["suix_getDynamicFieldObject"]
     }
 
     async fn run(&self, ctx: &mut TestContext) -> Result<(), anyhow::Error> {
@@ -41,156 +35,167 @@ impl TestCaseImpl for DynamicFieldTest {
 
         ctx.get_sui_from_faucet(Some(1)).await;
         let account = ctx.get_wallet_address();
-        let client = ctx.clone_fullnode_client();
-        let rgp = ctx.get_reference_gas_price().await;
+        let wallet = ctx.get_wallet();
+        let rgp = ctx.get_grpc_client().get_reference_gas_price().await?;
 
         // Step 1: Publish the object_basics package
         info!("Publishing object_basics package");
         let compiled =
             compile_example_package("../../crates/sui-core/src/unit_tests/data/object_basics")
                 .await;
-        let module_bytes = compiled.get_package_base64(false);
-        let deps = compiled.get_dependency_storage_package_ids();
 
-        let params = jsonrpsee::rpc_params![
-            account,
-            module_bytes,
-            deps,
-            None::<ObjectID>,
-            500_000_000u64.to_string()
-        ];
-        let data = ctx
-            .build_transaction_remotely("unsafe_publish", params)
+        let gas_obj = wallet
+            .get_one_gas_object_owned_by_address(account)
             .await
-            .context("building publish transaction for object_basics")?;
-        let response = ctx.sign_and_execute(data, "publish object_basics").await;
-        let changes = response.object_changes.as_ref().unwrap();
+            .context("fetching gas object for publish")?
+            .expect("Should have a gas object");
 
-        let package_id = changes
-            .iter()
-            .find_map(|change| match change {
-                ObjectChange::Published { package_id, .. } => Some(*package_id),
-                _ => None,
-            })
-            .expect("Should find published package");
+        let tx_data = TestTransactionBuilder::new(account, gas_obj, rgp)
+            .publish_with_data(PublishData::CompiledPackage(compiled))
+            .build();
+        let response = ctx
+            .grpc_sign_and_execute(tx_data, "publish object_basics")
+            .await;
+
+        let package_id = response
+            .get_new_package_obj()
+            .expect("Should find published package")
+            .0;
 
         info!("object_basics published: {}", package_id);
-        ctx.let_fullnode_sync(vec![response.digest], 5).await;
+        let tx_digest = *response.effects.transaction_digest();
+        ctx.let_fullnode_sync(vec![tx_digest], 5).await;
 
         // Step 2: Create a parent object
         info!("Creating parent object");
-        let txn = client
-            .transaction_builder()
+        let gas_obj = wallet
+            .get_one_gas_object_owned_by_address(account)
+            .await
+            .context("fetching gas object for create parent")?
+            .expect("Should have a gas object");
+
+        let tx_data = TestTransactionBuilder::new(account, gas_obj, rgp)
             .move_call(
-                account,
                 package_id,
                 "object_basics",
                 "create",
-                vec![],
                 vec![
-                    SuiJsonValue::new(json!("42"))?,
-                    SuiJsonValue::new(json!(account))?,
+                    CallArg::Pure(bcs::to_bytes(&42u64).unwrap()),
+                    CallArg::Pure(bcs::to_bytes(&account).unwrap()),
                 ],
-                None,
-                rgp * 2_000_000,
-                None,
             )
-            .await
-            .context("building move_call for create parent")?;
-        let response = ctx.sign_and_execute(txn, "create parent object").await;
+            .build();
+        let response = ctx
+            .grpc_sign_and_execute(tx_data, "create parent object")
+            .await;
+
         let parent_id = response
             .effects
-            .as_ref()
-            .unwrap()
             .created()
             .iter()
-            .find(|o| o.owner == Owner::AddressOwner(account))
+            .find(|o| o.1 == Owner::AddressOwner(account))
             .expect("Should create a parent object")
-            .reference
-            .object_id;
-        ctx.let_fullnode_sync(vec![response.digest], 5).await;
+            .0
+            .0;
+        let tx_digest = *response.effects.transaction_digest();
+        ctx.let_fullnode_sync(vec![tx_digest], 5).await;
         info!("Parent object created: {}", parent_id);
 
         // Step 3: Create a child object
         info!("Creating child object");
-        let txn = client
-            .transaction_builder()
+        let gas_obj = wallet
+            .get_one_gas_object_owned_by_address(account)
+            .await
+            .context("fetching gas object for create child")?
+            .expect("Should have a gas object");
+
+        let tx_data = TestTransactionBuilder::new(account, gas_obj, rgp)
             .move_call(
-                account,
                 package_id,
                 "object_basics",
                 "create",
-                vec![],
                 vec![
-                    SuiJsonValue::new(json!("100"))?,
-                    SuiJsonValue::new(json!(account))?,
+                    CallArg::Pure(bcs::to_bytes(&100u64).unwrap()),
+                    CallArg::Pure(bcs::to_bytes(&account).unwrap()),
                 ],
-                None,
-                rgp * 2_000_000,
-                None,
             )
-            .await
-            .context("building move_call for create child")?;
-        let response = ctx.sign_and_execute(txn, "create child object").await;
+            .build();
+        let response = ctx
+            .grpc_sign_and_execute(tx_data, "create child object")
+            .await;
+
         let child_id = response
             .effects
-            .as_ref()
-            .unwrap()
             .created()
             .iter()
-            .find(|o| o.owner == Owner::AddressOwner(account))
+            .find(|o| o.1 == Owner::AddressOwner(account))
             .expect("Should create a child object")
-            .reference
-            .object_id;
-        ctx.let_fullnode_sync(vec![response.digest], 5).await;
+            .0
+            .0;
+        let tx_digest = *response.effects.transaction_digest();
+        ctx.let_fullnode_sync(vec![tx_digest], 5).await;
         info!("Child object created: {}", child_id);
 
         // Step 4: Add the child as a dynamic object field on the parent
         info!("Adding dynamic object field");
-        let txn = client
-            .transaction_builder()
+        let mut grpc = ctx.get_grpc_client();
+        let parent_obj = grpc
+            .get_object(parent_id)
+            .await
+            .context("fetching parent object")?;
+        let parent_ref = parent_obj.compute_object_reference();
+        let child_obj = grpc
+            .get_object(child_id)
+            .await
+            .context("fetching child object")?;
+        let child_ref = child_obj.compute_object_reference();
+
+        let gas_obj = wallet
+            .get_one_gas_object_owned_by_address(account)
+            .await
+            .context("fetching gas object for add_ofield")?
+            .expect("Should have a gas object");
+
+        let tx_data = TestTransactionBuilder::new(account, gas_obj, rgp)
             .move_call(
-                account,
                 package_id,
                 "object_basics",
                 "add_ofield",
-                vec![],
                 vec![
-                    SuiJsonValue::from_object_id(parent_id),
-                    SuiJsonValue::from_object_id(child_id),
+                    CallArg::Object(ObjectArg::ImmOrOwnedObject(parent_ref)),
+                    CallArg::Object(ObjectArg::ImmOrOwnedObject(child_ref)),
                 ],
-                None,
-                rgp * 2_000_000,
-                None,
             )
-            .await
-            .context("building move_call for add_ofield")?;
-        let response = ctx.sign_and_execute(txn, "add dynamic object field").await;
-        assert!(response.status_ok().unwrap());
-        ctx.let_fullnode_sync(vec![response.digest], 5).await;
+            .build();
+        let response = ctx
+            .grpc_sign_and_execute(tx_data, "add dynamic object field")
+            .await;
+        assert!(response.effects.status().is_ok());
+        let tx_digest = *response.effects.transaction_digest();
+        ctx.let_fullnode_sync(vec![tx_digest], 5).await;
         info!(
             "Dynamic object field added: child {} on parent {}",
             child_id, parent_id
         );
 
-        // Step 5: Query dynamic fields via RPC
-        info!("Testing get_dynamic_fields RPC");
-        let dynamic_fields = client
-            .read_api()
-            .get_dynamic_fields(parent_id, None, Some(10))
+        // Step 5: Query dynamic fields via gRPC
+        info!("Testing get_dynamic_fields via gRPC");
+        let dynamic_fields = grpc
+            .get_dynamic_fields(parent_id, Some(10), None)
             .await
             .context("get_dynamic_fields")?;
         assert!(
-            !dynamic_fields.data.is_empty(),
+            !dynamic_fields.dynamic_fields.is_empty(),
             "Parent should have at least one dynamic field"
         );
         info!(
             "get_dynamic_fields verified: {} field(s) on parent",
-            dynamic_fields.data.len()
+            dynamic_fields.dynamic_fields.len()
         );
 
-        // Step 6: Query dynamic field object via RPC
+        // Step 6: Query dynamic field object via JSON-RPC (no gRPC equivalent)
         info!("Testing get_dynamic_field_object RPC");
+        let client = ctx.clone_fullnode_client();
         let field_name = DynamicFieldName {
             type_: TypeTag::Bool,
             value: json!(true),
@@ -208,35 +213,40 @@ impl TestCaseImpl for DynamicFieldTest {
 
         // Step 7: Remove the dynamic object field
         info!("Removing dynamic object field");
-        let txn = client
-            .transaction_builder()
+        let parent_obj = grpc
+            .get_object(parent_id)
+            .await
+            .context("fetching parent object for remove")?;
+        let parent_ref = parent_obj.compute_object_reference();
+
+        let gas_obj = wallet
+            .get_one_gas_object_owned_by_address(account)
+            .await
+            .context("fetching gas object for remove_ofield")?
+            .expect("Should have a gas object");
+
+        let tx_data = TestTransactionBuilder::new(account, gas_obj, rgp)
             .move_call(
-                account,
                 package_id,
                 "object_basics",
                 "remove_ofield",
-                vec![],
-                vec![SuiJsonValue::from_object_id(parent_id)],
-                None,
-                rgp * 2_000_000,
-                None,
+                vec![CallArg::Object(ObjectArg::ImmOrOwnedObject(parent_ref))],
             )
-            .await
-            .context("building move_call for remove_ofield")?;
+            .build();
         let response = ctx
-            .sign_and_execute(txn, "remove dynamic object field")
+            .grpc_sign_and_execute(tx_data, "remove dynamic object field")
             .await;
-        assert!(response.status_ok().unwrap());
-        ctx.let_fullnode_sync(vec![response.digest], 5).await;
+        assert!(response.effects.status().is_ok());
+        let tx_digest = *response.effects.transaction_digest();
+        ctx.let_fullnode_sync(vec![tx_digest], 5).await;
 
-        // Verify the dynamic field is gone
-        let dynamic_fields_after = client
-            .read_api()
-            .get_dynamic_fields(parent_id, None, Some(10))
+        // Verify the dynamic field is gone via gRPC
+        let dynamic_fields_after = grpc
+            .get_dynamic_fields(parent_id, Some(10), None)
             .await
             .context("get_dynamic_fields after removal")?;
         assert!(
-            dynamic_fields_after.data.is_empty(),
+            dynamic_fields_after.dynamic_fields.is_empty(),
             "Parent should have no dynamic fields after removal"
         );
         info!("Dynamic field removal verified: 0 fields remaining");

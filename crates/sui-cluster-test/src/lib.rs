@@ -109,6 +109,20 @@ impl TestContext {
         self.client.get_wallet()
     }
 
+    fn get_grpc_client(&self) -> sui_rpc_api::Client {
+        self.client.get_wallet().grpc_client().unwrap()
+    }
+
+    async fn grpc_sign_and_execute(
+        &self,
+        txn_data: TransactionData,
+        desc: &str,
+    ) -> sui_rpc_api::client::ExecutedTransaction {
+        let signature = self.get_context().sign(&txn_data, desc).await;
+        let tx = Transaction::from_data(txn_data, vec![signature]);
+        self.get_wallet().execute_transaction_must_succeed(tx).await
+    }
+
     async fn get_latest_sui_system_state(&self) -> SuiSystemStateSummary {
         self.client
             .get_fullnode_client()
