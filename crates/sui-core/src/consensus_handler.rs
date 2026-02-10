@@ -1639,7 +1639,6 @@ impl<C: CheckpointServiceNotify + Send + Sync> ConsensusHandler<C> {
                 .calculate_pending_checkpoint_height(commit_info.round);
 
             settlement = Some(Schedulable::AccumulatorSettlement(epoch, checkpoint_height));
-            info!("CLAUDE: created settlement with height={} from round={}", checkpoint_height, commit_info.round);
 
             if state.randomness_round.is_some() || !randomness_transactions_to_schedule.is_empty() {
                 randomness_settlement = Some(Schedulable::AccumulatorSettlement(
@@ -1762,10 +1761,8 @@ impl<C: CheckpointServiceNotify + Send + Sync> ConsensusHandler<C> {
                         let height = queue.next_height();
                         let mut chunk_vec: Vec<_> = chunk.to_vec();
                         if accumulators_enabled {
-                            info!("CLAUDE: build_chunks adding settlement with height={}", height);
                             chunk_vec.push(Schedulable::AccumulatorSettlement(epoch, height));
                         }
-                        info!("CLAUDE: chunk contains {:?}", chunk_vec.iter().map(|s| s.key()).collect::<Vec<_>>());
                         (chunk_vec, height)
                     })
                     .collect()
@@ -1852,18 +1849,16 @@ impl<C: CheckpointServiceNotify + Send + Sync> ConsensusHandler<C> {
             max_tx,
         );
 
-        if protocol_config.settle_early_in_consensus_handler() {
-            for settlement in settlements {
-                self.epoch_store.store_settlement_batch_info(
-                    settlement.settlement_key,
-                    SettlementBatchInfo {
-                        tx_keys: settlement.tx_keys,
-                        checkpoint_height: settlement.checkpoint_height,
-                        tx_index_offset: settlement.tx_index_offset,
-                        checkpoint_seq: settlement.checkpoint_seq,
-                    },
-                );
-            }
+        for settlement in settlements {
+            self.epoch_store.store_settlement_batch_info(
+                settlement.settlement_key,
+                SettlementBatchInfo {
+                    tx_keys: settlement.tx_keys,
+                    checkpoint_height: settlement.checkpoint_height,
+                    tx_index_offset: settlement.tx_index_offset,
+                    checkpoint_seq: settlement.checkpoint_seq,
+                },
+            );
         }
 
         if final_round || should_write_random_checkpoint {
@@ -1888,18 +1883,16 @@ impl<C: CheckpointServiceNotify + Send + Sync> ConsensusHandler<C> {
             );
             pending_checkpoints.extend(randomness_checkpoints);
 
-            if protocol_config.settle_early_in_consensus_handler() {
-                for settlement in randomness_settlements {
-                    self.epoch_store.store_settlement_batch_info(
-                        settlement.settlement_key,
-                        SettlementBatchInfo {
-                            tx_keys: settlement.tx_keys,
-                            checkpoint_height: settlement.checkpoint_height,
-                            tx_index_offset: settlement.tx_index_offset,
-                            checkpoint_seq: settlement.checkpoint_seq,
-                        },
-                    );
-                }
+            for settlement in randomness_settlements {
+                self.epoch_store.store_settlement_batch_info(
+                    settlement.settlement_key,
+                    SettlementBatchInfo {
+                        tx_keys: settlement.tx_keys,
+                        checkpoint_height: settlement.checkpoint_height,
+                        tx_index_offset: settlement.tx_index_offset,
+                        checkpoint_seq: settlement.checkpoint_seq,
+                    },
+                );
             }
 
             pending_checkpoints.extend(

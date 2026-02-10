@@ -114,7 +114,7 @@ pub struct PendingCheckpointInfo {
     pub consensus_commit_ref: CommitRef,
     pub rejected_transactions_digest: Digest,
     // Pre-assigned checkpoint sequence number from consensus handler.
-    // Only set when settle_early_in_consensus_handler is enabled.
+    // Only set when split_checkpoints_in_consensus_handler is enabled.
     pub checkpoint_seq: Option<CheckpointSequenceNumber>,
 }
 
@@ -1518,13 +1518,13 @@ impl CheckpointBuilder {
             )
             .await?;
         let highest_sequence = *new_checkpoints.last().0.sequence_number();
-        let early_settlement_enabled = self
+        let split_checkpoints_enabled = self
             .epoch_store
             .protocol_config()
-            .settle_early_in_consensus_handler();
+            .split_checkpoints_in_consensus_handler();
         if highest_sequence <= highest_executed_sequence
             && poll_count > 1
-            && !early_settlement_enabled
+            && !split_checkpoints_enabled
         {
             debug_fatal!(
                 "resolve_checkpoint_transactions should be instantaneous when executed checkpoint is ahead of checkpoint builder"
@@ -1575,11 +1575,11 @@ impl CheckpointBuilder {
         assert_eq!(new_checkpoints.len(), 1, "Expected exactly one checkpoint");
         let sequence = *new_checkpoints.first().0.sequence_number();
         let digest = new_checkpoints.first().0.digest();
-        let early_settlement_enabled = self
+        let split_checkpoints_enabled = self
             .epoch_store
             .protocol_config()
-            .settle_early_in_consensus_handler();
-        if sequence <= highest_executed_sequence && poll_count > 1 && !early_settlement_enabled {
+            .split_checkpoints_in_consensus_handler();
+        if sequence <= highest_executed_sequence && poll_count > 1 && !split_checkpoints_enabled {
             debug_fatal!(
                 "resolve_checkpoint_transactions should be instantaneous when executed checkpoint is ahead of checkpoint builder"
             );
@@ -1998,7 +1998,7 @@ impl CheckpointBuilder {
                 let settlement_effects = if self
                     .epoch_store
                     .protocol_config()
-                    .settle_early_in_consensus_handler()
+                    .split_checkpoints_in_consensus_handler()
                 {
                     let result = self
                         .epoch_store

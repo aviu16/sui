@@ -491,7 +491,7 @@ impl ExecutionScheduler {
 
         if epoch_store
             .protocol_config()
-            .settle_early_in_consensus_handler()
+            .split_checkpoints_in_consensus_handler()
         {
             let queue = self.get_or_start_settlement_queue(epoch_store);
             for (settlement_key, env) in settlement_txns {

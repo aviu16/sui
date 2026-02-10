@@ -2088,7 +2088,6 @@ impl AuthorityPerEpochStore {
         batch_info: SettlementBatchInfo,
     ) {
         debug_assert!(matches!(tx_key, TransactionKey::AccumulatorSettlement(..)));
-        info!("CLAUDE: store_settlement_batch_info key={:?}", tx_key);
         self.settlement_batch_info.lock().insert(tx_key, batch_info);
     }
 
@@ -2097,9 +2096,7 @@ impl AuthorityPerEpochStore {
         tx_key: &TransactionKey,
     ) -> Option<SettlementBatchInfo> {
         debug_assert!(matches!(tx_key, TransactionKey::AccumulatorSettlement(..)));
-        let result = self.settlement_batch_info.lock().remove(tx_key);
-        info!("CLAUDE: take_settlement_batch_info key={:?} found={}", tx_key, result.is_some());
-        result
+        self.settlement_batch_info.lock().remove(tx_key)
     }
 
     pub(crate) fn notify_settlement_result_ready(

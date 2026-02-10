@@ -984,10 +984,6 @@ struct FeatureFlags {
     // If true perform consistent verification of metadata
     #[serde(skip_serializing_if = "is_false")]
     validator_metadata_verify_v2: bool,
-
-    // If true, settle transactions early in consensus handler instead of checkpoint builder.
-    #[serde(skip_serializing_if = "is_false")]
-    settle_early_in_consensus_handler: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -2585,10 +2581,6 @@ impl ProtocolConfig {
 
     pub fn validator_metadata_verify_v2(&self) -> bool {
         self.feature_flags.validator_metadata_verify_v2
-    }
-
-    pub fn settle_early_in_consensus_handler(&self) -> bool {
-        self.feature_flags.settle_early_in_consensus_handler
     }
 }
 
@@ -4544,7 +4536,6 @@ impl ProtocolConfig {
                     if chain != Chain::Mainnet {
                         cfg.feature_flags.enable_object_funds_withdraw = true;
                     }
-                    cfg.feature_flags.settle_early_in_consensus_handler = true;
                 }
                 111 => {
                     cfg.feature_flags.validator_metadata_verify_v2 = true;
@@ -4947,10 +4938,6 @@ impl ProtocolConfig {
 
     pub fn set_split_checkpoints_in_consensus_handler_for_testing(&mut self, val: bool) {
         self.feature_flags.split_checkpoints_in_consensus_handler = val;
-    }
-
-    pub fn set_settle_early_in_consensus_handler_for_testing(&mut self, val: bool) {
-        self.feature_flags.settle_early_in_consensus_handler = val;
     }
 }
 
