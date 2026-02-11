@@ -1977,22 +1977,19 @@ impl CheckpointBuilder {
                 }
             };
 
-            let unsorted =
+            let mut checkpoint_effects: Vec<TransactionEffects> =
                 self.complete_checkpoint_effects(root_effects, &mut effects_in_current_checkpoint)?;
 
-            let _scope = monitored_scope("CheckpointBuilder::causal_sort");
             let tx_index_offset = all_effects.len() as u64;
-            let mut sorted: Vec<TransactionEffects> = Vec::with_capacity(unsorted.len() + 1);
 
             if let Some((ccp_digest, ccp_effects)) = consensus_commit_prologue {
                 if cfg!(debug_assertions) {
-                    for tx in unsorted.iter() {
+                    for tx in checkpoint_effects.iter() {
                         assert!(tx.transaction_digest() != &ccp_digest);
                     }
                 }
-                sorted.push(ccp_effects);
+                checkpoint_effects.insert(0, ccp_effects);
             }
-            sorted.extend(CausalOrder::causal_sort(unsorted));
 
             if let Some(settlement_key) = &checkpoint_roots.settlement_root {
                 let settlement_effects = if self
@@ -2009,7 +2006,7 @@ impl CheckpointBuilder {
                 } else {
                     let (tx_key, settlement_effects) = self
                         .construct_and_execute_settlement_transactions(
-                            &sorted,
+                            &checkpoint_effects,
                             checkpoint_roots.height,
                             next_checkpoint_seq,
                             tx_index_offset,
@@ -2019,10 +2016,10 @@ impl CheckpointBuilder {
                     settlement_effects
                 };
 
-                sorted.extend(settlement_effects);
+                checkpoint_effects.extend(settlement_effects);
             }
 
-            all_effects.extend(sorted);
+            all_effects.extend(checkpoint_effects);
         }
 
         #[cfg(msim)]

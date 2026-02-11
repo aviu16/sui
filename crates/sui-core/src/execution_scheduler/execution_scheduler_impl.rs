@@ -9,7 +9,6 @@ use crate::{
         epoch_start_configuration::EpochStartConfigTrait,
         shared_object_version_manager::Schedulable,
     },
-    checkpoints::causal_order::CausalOrder,
     execution_cache::{ObjectCacheRead, TransactionCacheRead},
     execution_scheduler::{
         ExecutingGuard, PendingCertificateStats,
@@ -582,12 +581,6 @@ impl ExecutionScheduler {
             )
             .await;
 
-        let sorted_effects = Self::sort_effects_for_settlement(
-            self.transaction_cache_read.as_ref(),
-            &digests,
-            effects,
-        );
-
         let epoch = epoch_store.epoch();
         let accumulator_root_obj_initial_shared_version = epoch_store
             .epoch_start_config()
@@ -598,7 +591,7 @@ impl ExecutionScheduler {
 
         let builder = AccumulatorSettlementTxBuilder::new(
             Some(self.transaction_cache_read.as_ref()),
-            &sorted_effects,
+            &effects,
             checkpoint_seq,
             batch_info.tx_index_offset,
         );
@@ -715,33 +708,6 @@ impl ExecutionScheduler {
         );
 
         debug!(?settlement_key, "early settlement: completed");
-    }
-
-    fn sort_effects_for_settlement(
-        transaction_cache: &dyn TransactionCacheRead,
-        digests: &[TransactionDigest],
-        effects: Vec<sui_types::effects::TransactionEffects>,
-    ) -> Vec<sui_types::effects::TransactionEffects> {
-        if effects.is_empty() {
-            return effects;
-        }
-
-        let first_tx = transaction_cache
-            .get_transaction_block(&digests[0])
-            .expect("Transaction block must exist");
-
-        let is_ccp = first_tx.transaction_data().is_consensus_commit_prologue();
-
-        let mut sorted = Vec::with_capacity(effects.len());
-        if is_ccp {
-            let (ccp_effects, rest) = effects.split_first().unwrap();
-            sorted.push(ccp_effects.clone());
-            sorted.extend(CausalOrder::causal_sort(rest.to_vec()));
-        } else {
-            sorted.extend(CausalOrder::causal_sort(effects));
-        }
-
-        sorted
     }
 
     fn schedule_tx_keys(
