@@ -1,7 +1,7 @@
 // Copyright (c) Mysten Labs, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-pub(crate) mod causal_order;
+mod causal_order;
 pub mod checkpoint_executor;
 mod checkpoint_output;
 mod metrics;
@@ -1518,14 +1518,7 @@ impl CheckpointBuilder {
             )
             .await?;
         let highest_sequence = *new_checkpoints.last().0.sequence_number();
-        let split_checkpoints_enabled = self
-            .epoch_store
-            .protocol_config()
-            .split_checkpoints_in_consensus_handler();
-        if highest_sequence <= highest_executed_sequence
-            && poll_count > 1
-            && !split_checkpoints_enabled
-        {
+        if highest_sequence <= highest_executed_sequence && poll_count > 1 {
             debug_fatal!(
                 "resolve_checkpoint_transactions should be instantaneous when executed checkpoint is ahead of checkpoint builder"
             );
