@@ -1575,11 +1575,7 @@ impl CheckpointBuilder {
         assert_eq!(new_checkpoints.len(), 1, "Expected exactly one checkpoint");
         let sequence = *new_checkpoints.first().0.sequence_number();
         let digest = new_checkpoints.first().0.digest();
-        let split_checkpoints_enabled = self
-            .epoch_store
-            .protocol_config()
-            .split_checkpoints_in_consensus_handler();
-        if sequence <= highest_executed_sequence && poll_count > 1 && !split_checkpoints_enabled {
+        if sequence <= highest_executed_sequence && poll_count > 1 {
             debug_fatal!(
                 "resolve_checkpoint_transactions should be instantaneous when executed checkpoint is ahead of checkpoint builder"
             );
@@ -1914,14 +1910,6 @@ impl CheckpointBuilder {
         let mut all_effects: Vec<TransactionEffects> = Vec::new();
         let mut all_root_digests: Vec<TransactionDigest> = Vec::new();
 
-        let last_checkpoint =
-            Self::load_last_built_checkpoint_summary(&self.epoch_store, &self.store)?;
-        let next_checkpoint_seq = last_checkpoint
-            .as_ref()
-            .map(|(seq, _)| *seq)
-            .unwrap_or_default()
-            + 1;
-
         for checkpoint_roots in &pending.roots {
             let tx_roots = &checkpoint_roots.tx_roots;
 
@@ -1980,8 +1968,6 @@ impl CheckpointBuilder {
             let mut checkpoint_effects: Vec<TransactionEffects> =
                 self.complete_checkpoint_effects(root_effects, &mut effects_in_current_checkpoint)?;
 
-            let tx_index_offset = all_effects.len() as u64;
-
             if let Some((ccp_digest, ccp_effects)) = consensus_commit_prologue {
                 if cfg!(debug_assertions) {
                     for tx in checkpoint_effects.iter() {
@@ -1992,31 +1978,12 @@ impl CheckpointBuilder {
             }
 
             if let Some(settlement_key) = &checkpoint_roots.settlement_root {
-                let settlement_effects = if self
+                let result = self
                     .epoch_store
-                    .protocol_config()
-                    .split_checkpoints_in_consensus_handler()
-                {
-                    let result = self
-                        .epoch_store
-                        .wait_for_settlement_result(*settlement_key)
-                        .await;
-                    debug!(?settlement_key, "received early settlement result");
-                    result.settlement_effects
-                } else {
-                    let (tx_key, settlement_effects) = self
-                        .construct_and_execute_settlement_transactions(
-                            &checkpoint_effects,
-                            checkpoint_roots.height,
-                            next_checkpoint_seq,
-                            tx_index_offset,
-                        )
-                        .await;
-                    debug!(?tx_key, "executed settlement transactions");
-                    settlement_effects
-                };
-
-                checkpoint_effects.extend(settlement_effects);
+                    .wait_for_settlement_result(*settlement_key)
+                    .await;
+                debug!(?settlement_key, "received early settlement result");
+                checkpoint_effects.extend(result.settlement_effects);
             }
 
             all_effects.extend(checkpoint_effects);
