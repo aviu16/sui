@@ -4554,15 +4554,24 @@ impl ProtocolConfig {
             }
         }
 
-        // Simtest specific overrides.
-        if cfg!(msim) {
-            // Trigger checkpoint splitting more often.
-            // cfg.max_transactions_per_checkpoint = Some(10);
-            // FIXME: Re-introduce this once we resolve the checkpoint splitting issue
-            // in the quarantine output.
+        cfg
+    }
+
+    pub fn apply_seeded_test_overrides(&mut self, seed: &[u8; 32]) {
+        let should_apply = if cfg!(msim) {
+            true
+        } else {
+            mysten_common::in_antithesis()
+        };
+        if !should_apply {
+            return;
         }
 
-        cfg
+        use rand::{Rng, SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::from_seed(*seed);
+        let max_txns = rng.gen_range(10..=100u64);
+        info!("seeded test override: max_transactions_per_checkpoint = {max_txns}");
+        self.max_transactions_per_checkpoint = Some(max_txns);
     }
 
     // Extract the bytecode verifier config from this protocol config.
@@ -4876,6 +4885,7 @@ impl ProtocolConfig {
         self.feature_flags.enable_authenticated_event_streams = true;
         self.feature_flags
             .include_checkpoint_artifacts_digest_in_summary = true;
+        self.feature_flags.split_checkpoints_in_consensus_handler = true;
     }
 
     pub fn disable_authenticated_event_streams_for_testing(&mut self) {
