@@ -24,7 +24,7 @@ use tracing::{info, warn};
 
 /// The minimum and maximum protocol versions supported by this build.
 const MIN_PROTOCOL_VERSION: u64 = 1;
-const MAX_PROTOCOL_VERSION: u64 = 111;
+const MAX_PROTOCOL_VERSION: u64 = 112;
 
 // Record history of protocol version allocations here:
 //
@@ -296,6 +296,7 @@ const MAX_PROTOCOL_VERSION: u64 = 111;
 //              split_checkpoints_in_consensus_handler in devnet
 //              Enable additional validation on zkLogin public identifier.
 // Version 111: Validator metadata
+// Version 112: Gate seeded test overrides for checkpoint tx limit behind feature flag.
 
 #[derive(Copy, Clone, Debug, Hash, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ProtocolVersion(u64);
@@ -984,6 +985,9 @@ struct FeatureFlags {
     // If true perform consistent verification of metadata
     #[serde(skip_serializing_if = "is_false")]
     validator_metadata_verify_v2: bool,
+
+    #[serde(skip_serializing_if = "is_false")]
+    randomize_checkpoint_tx_limit_in_tests: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -4540,6 +4544,9 @@ impl ProtocolConfig {
                 111 => {
                     cfg.feature_flags.validator_metadata_verify_v2 = true;
                 }
+                112 => {
+                    cfg.feature_flags.randomize_checkpoint_tx_limit_in_tests = true;
+                }
                 // Use this template when making changes:
                 //
                 //     // modify an existing constant.
@@ -4554,15 +4561,28 @@ impl ProtocolConfig {
             }
         }
 
-        // Simtest specific overrides.
-        if cfg!(msim) {
-            // Trigger checkpoint splitting more often.
-            // cfg.max_transactions_per_checkpoint = Some(10);
-            // FIXME: Re-introduce this once we resolve the checkpoint splitting issue
-            // in the quarantine output.
+        cfg
+    }
+
+    pub fn apply_seeded_test_overrides(&mut self, seed: &[u8; 32]) {
+        if !self.feature_flags.randomize_checkpoint_tx_limit_in_tests {
+            return;
         }
 
-        cfg
+        let should_apply = if cfg!(msim) {
+            true
+        } else {
+            mysten_common::in_antithesis()
+        };
+        if !should_apply {
+            return;
+        }
+
+        use rand::{Rng, SeedableRng, rngs::StdRng};
+        let mut rng = StdRng::from_seed(*seed);
+        let max_txns = rng.gen_range(10..=100u64);
+        info!("seeded test override: max_transactions_per_checkpoint = {max_txns}");
+        self.max_transactions_per_checkpoint = Some(max_txns);
     }
 
     // Extract the bytecode verifier config from this protocol config.
@@ -4876,6 +4896,7 @@ impl ProtocolConfig {
         self.feature_flags.enable_authenticated_event_streams = true;
         self.feature_flags
             .include_checkpoint_artifacts_digest_in_summary = true;
+        self.feature_flags.split_checkpoints_in_consensus_handler = true;
     }
 
     pub fn disable_authenticated_event_streams_for_testing(&mut self) {
