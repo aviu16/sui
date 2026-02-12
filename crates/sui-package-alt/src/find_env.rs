@@ -5,6 +5,7 @@ use std::{collections::BTreeMap, path::Path};
 
 use anyhow::bail;
 use indexmap::IndexMap;
+use move_compiler::format_oxford_list;
 use move_package_alt::{
     RootPackage,
     schema::{Environment, EnvironmentID, EnvironmentName},
@@ -133,20 +134,10 @@ impl EnvFinder<'_> {
 
         if candidates.is_empty() {
             // ephemeral case, no environment found with that name, we error
+            let options =
+                format_oxford_list!(ITER, "or", "`--build-env {}`", self.manifest_envs.keys());
             bail!(
-                "Your active environment `{active_env}` is not present in `Move.toml`, so you cannot \
-                publish to `{active_env}`.
-
-            - If you want to create a temporary publication on `{active_env}` and record the addresses \
-               in an ephemeral file, use the `test-publish` command instead.
-
-                sui client test-publish --help
-
-            - If you want to publish to `{active_env}` and record the addresses in the shared \
-            `Publications.toml` file, you will need to add the following to `Move.toml`:
-
-                [environments]
-                {active_env} = \"{chain_id}\""
+                "Could not determine the correct dependencies to use for `{active_env}`; pass one of {options}."
             );
         }
 
