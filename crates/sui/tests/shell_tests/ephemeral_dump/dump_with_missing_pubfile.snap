@@ -31,7 +31,7 @@ success: true
 exit_code: 0
 ----- stdout -----
 === should fail because of unknown build-env ===
-Ephemeral publication file does not exist, so you must pass `--build-env <env>` to indicate what environment it should be created for
+Could not determine the correct dependencies to use for `devnet`; pass one of `--build-env testnet` or `--build-env mainnet`.
 === should succeed ===
 BUILDING main_pkg
 
