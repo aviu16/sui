@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::authority::authority_per_epoch_store::{
-    AuthorityEpochTables, EncG, ExecutionIndicesWithStats, LockDetails, LockDetailsWrapper, PkG,
+    AuthorityEpochTables, EncG, ExecutionIndicesWithStatsV2, LockDetails, LockDetailsWrapper, PkG,
 };
 use crate::authority::transaction_deferral::DeferralKey;
 use crate::checkpoints::BuilderCheckpointSummary;
@@ -59,7 +59,7 @@ pub(crate) struct ConsensusCommitOutput {
     consensus_messages_processed: BTreeSet<SequencedConsensusTransactionKey>,
     end_of_publish: BTreeSet<AuthorityName>,
     reconfig_state: Option<ReconfigState>,
-    consensus_commit_stats: Option<ExecutionIndicesWithStats>,
+    consensus_commit_stats: Option<ExecutionIndicesWithStatsV2>,
 
     // transaction scheduling state
     next_shared_object_versions: Option<HashMap<ConsensusObjectSequenceKey, SequenceNumber>>,
@@ -182,7 +182,7 @@ impl ConsensusCommitOutput {
             .push((source, generation, estimates));
     }
 
-    pub(crate) fn record_consensus_commit_stats(&mut self, stats: ExecutionIndicesWithStats) {
+    pub(crate) fn record_consensus_commit_stats(&mut self, stats: ExecutionIndicesWithStatsV2) {
         self.consensus_commit_stats = Some(stats);
     }
 
@@ -319,7 +319,7 @@ impl ConsensusCommitOutput {
         let round = consensus_commit_stats.index.last_committed_round;
 
         batch.insert_batch(
-            &tables.last_consensus_stats,
+            &tables.last_consensus_stats_v2,
             [(LAST_CONSENSUS_STATS_ADDR, consensus_commit_stats)],
         )?;
 
