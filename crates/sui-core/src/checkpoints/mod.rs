@@ -1569,7 +1569,10 @@ impl CheckpointBuilder {
         let sequence = *new_checkpoints.first().0.sequence_number();
         let digest = new_checkpoints.first().0.digest();
         if sequence <= highest_executed_sequence && poll_count > 1 {
-            debug_fatal!(
+            warn!(
+                seq = sequence,
+                highest_executed_sequence,
+                poll_count,
                 "resolve_checkpoint_transactions should be instantaneous when executed checkpoint is ahead of checkpoint builder"
             );
         }

@@ -425,6 +425,10 @@ pub struct AuthorityPerEpochStore {
     pub(crate) metrics: Arc<EpochMetrics>,
     epoch_start_configuration: Arc<EpochStartConfiguration>,
 
+    /// The last checkpoint sequence number from the previous epoch. Used to derive the
+    /// first checkpoint sequence number of this epoch for the consensus handler.
+    previous_epoch_last_checkpoint: CheckpointSequenceNumber,
+
     /// Execution state that has to restart at each epoch change
     execution_component: ExecutionComponents,
 
@@ -1329,6 +1333,7 @@ impl AuthorityPerEpochStore {
             epoch_close_time: Default::default(),
             metrics,
             epoch_start_configuration,
+            previous_epoch_last_checkpoint: highest_executed_checkpoint,
             execution_component,
             chain,
             jwk_aggregator,
@@ -1483,6 +1488,10 @@ impl AuthorityPerEpochStore {
 
     pub fn epoch_start_state(&self) -> &EpochStartSystemState {
         self.epoch_start_configuration.epoch_start_state()
+    }
+
+    pub fn first_checkpoint_seq(&self) -> CheckpointSequenceNumber {
+        self.previous_epoch_last_checkpoint + 1
     }
 
     pub fn get_chain_identifier(&self) -> ChainIdentifier {

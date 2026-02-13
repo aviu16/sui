@@ -75,8 +75,8 @@ use crate::{
         transaction_deferral::{DeferralKey, DeferralReason, transaction_deferral_within_limit},
     },
     checkpoints::{
-        CheckpointBuilder, CheckpointHeight, CheckpointRoots, CheckpointService,
-        CheckpointServiceNotify, PendingCheckpoint, PendingCheckpointInfo, PendingCheckpointV2,
+        CheckpointHeight, CheckpointRoots, CheckpointService, CheckpointServiceNotify,
+        PendingCheckpoint, PendingCheckpointInfo, PendingCheckpointV2,
     },
     consensus_adapter::ConsensusAdapter,
     consensus_throughput_calculator::ConsensusThroughputCalculator,
@@ -164,27 +164,9 @@ impl ConsensusHandlerInitializer {
             .protocol_config()
             .split_checkpoints_in_consensus_handler()
         {
-            self.epoch_store
-                .get_last_consensus_stats_v2()
-                .expect("Should be able to read last consensus stats v2")
-                .map(|s| s.next_checkpoint_seq)
-                .unwrap_or_else(|| {
-                    CheckpointBuilder::load_last_built_checkpoint_summary(
-                        &self.epoch_store,
-                        self.checkpoint_service.checkpoint_store(),
-                    )
-                    .expect("Should be able to load checkpoint summary")
-                    .map(|(seq, _)| seq + 1)
-                    .unwrap_or(0)
-                })
+            self.epoch_store.first_checkpoint_seq()
         } else {
-            CheckpointBuilder::load_last_built_checkpoint_summary(
-                &self.epoch_store,
-                self.checkpoint_service.checkpoint_store(),
-            )
-            .expect("Should be able to load checkpoint summary")
-            .map(|(seq, _)| seq + 1)
-            .unwrap_or(0)
+            0
         };
 
         ConsensusHandler::new(
@@ -811,6 +793,7 @@ impl<C> ConsensusHandler<C> {
         // stats is empty at the beginning of epoch.
         if !last_consensus_stats.stats.is_initialized() {
             last_consensus_stats.stats = ConsensusStats::new(committee.size());
+            last_consensus_stats.next_checkpoint_seq = next_checkpoint_seq;
         }
         let execution_scheduler_sender =
             ExecutionSchedulerSender::start(execution_scheduler, epoch_store.clone());
@@ -819,6 +802,7 @@ impl<C> ConsensusHandler<C> {
             .get_consensus_commit_rate_estimation_window_size();
         let last_built_timestamp = last_consensus_stats.last_checkpoint_flush_timestamp;
         let checkpoint_height = last_consensus_stats.height;
+        let next_checkpoint_seq = last_consensus_stats.next_checkpoint_seq;
         Self {
             epoch_store,
             last_consensus_stats,
